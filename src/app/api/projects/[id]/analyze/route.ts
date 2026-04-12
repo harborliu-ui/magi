@@ -13,6 +13,7 @@ export async function POST(req: NextRequest, ctx: Ctx) {
   const { id } = await ctx.params;
   const url = new URL(req.url);
   const dryRun = url.searchParams.get('dry_run') === '1';
+  const mode = url.searchParams.get('mode') || 'full'; // 'full' | 'refresh'
   const db = getDb();
 
   const project = db.prepare('SELECT * FROM projects WHERE id = ?').get(id) as Record<string, string> | undefined;
@@ -39,13 +40,40 @@ export async function POST(req: NextRequest, ctx: Ctx) {
     });
   }
 
+  // In refresh mode, collect confirmed CPs and rules to feed back to LLM
+  let confirmedContext = '';
+  if (mode === 'refresh') {
+    const answeredCPs = db.prepare(
+      "SELECT question, actual_answer, status FROM clarification_points WHERE project_id = ? AND status IN ('answered','converted')"
+    ).all(id) as { question: string; actual_answer: string; status: string }[];
+    const existingRules = db.prepare(
+      "SELECT rule_text FROM business_rules WHERE project_id = ?"
+    ).all(id) as { rule_text: string }[];
+
+    if (answeredCPs.length > 0 || existingRules.length > 0) {
+      confirmedContext = '\n\n## 已确认的信息（请在更新解读时纳入这些已确认的事实）\n';
+      if (answeredCPs.length > 0) {
+        confirmedContext += '### 已确认的待确认点\n' + answeredCPs.map((cp, i) =>
+          `${i + 1}. Q: ${cp.question}\n   A: ${cp.actual_answer} [${cp.status}]`
+        ).join('\n') + '\n';
+      }
+      if (existingRules.length > 0) {
+        confirmedContext += '### 已确认的业务规则\n' + existingRules.map((r, i) =>
+          `${i + 1}. ${r.rule_text}`
+        ).join('\n') + '\n';
+      }
+    }
+  }
+
   db.prepare("UPDATE projects SET status = 'analyzing', updated_at = datetime('now') WHERE id = ?").run(id);
 
   try {
+    const userContent = buildAnalysisUserPrompt(coreContent, referenceContent, systemContext + confirmedContext, analysisCustomRules);
+
     const result = await callLLM([
       { role: 'system', content: ANALYSIS_SYSTEM_PROMPT },
-      { role: 'user', content: buildAnalysisUserPrompt(coreContent, referenceContent, systemContext, analysisCustomRules) },
-    ], { max_tokens: 12000 }, { projectId: id, phase: 'analysis', action: 'analyze_brd' });
+      { role: 'user', content: userContent },
+    ], { max_tokens: 12000 }, { projectId: id, phase: 'analysis', action: mode === 'refresh' ? 'refresh_analysis' : 'analyze_brd' });
 
     type AnalysisResult = {
       brd_interpretation?: string;
@@ -59,11 +87,10 @@ export async function POST(req: NextRequest, ctx: Ctx) {
     try {
       parsed = safeJsonParse<AnalysisResult>(result);
     } catch (parseErr) {
-      // Retry once — ask LLM again with stricter instruction
       try {
         const retryResult = await callLLM([
           { role: 'system', content: ANALYSIS_SYSTEM_PROMPT },
-          { role: 'user', content: buildAnalysisUserPrompt(coreContent, referenceContent, systemContext, analysisCustomRules) },
+          { role: 'user', content: userContent },
           { role: 'assistant', content: result },
           { role: 'user', content: '你上次的输出存在 JSON 格式错误（字符串中的双引号未转义）。请重新输出完整的 JSON，确保所有字符串内部的双引号使用 \\" 转义。只输出 JSON，不要任何其他文字。' },
         ], { max_tokens: 12000 }, { projectId: id, phase: 'analysis', action: 'analyze_brd_retry' });
@@ -76,7 +103,7 @@ export async function POST(req: NextRequest, ctx: Ctx) {
     }
 
     const transaction = db.transaction(() => {
-      // Upsert analysis summary
+      // Always update analysis summary
       const existing = db.prepare('SELECT id FROM analysis_summaries WHERE project_id = ?').get(id);
       if (existing) {
         db.prepare(`UPDATE analysis_summaries SET brd_interpretation = ?, process_diagram = ?, version = version + 1, updated_at = datetime('now') WHERE project_id = ?`)
@@ -86,21 +113,35 @@ export async function POST(req: NextRequest, ctx: Ctx) {
           .run(uuid(), id, parsed.brd_interpretation || '', parsed.process_diagram || '');
       }
 
-      // Replace clarification points
-      db.prepare('DELETE FROM clarification_points WHERE project_id = ?').run(id);
+      if (mode === 'refresh') {
+        // Refresh mode: keep answered/converted CPs, only replace pending ones and add new ones
+        db.prepare("DELETE FROM clarification_points WHERE project_id = ? AND status = 'pending'").run(id);
+      } else {
+        // Full mode: replace all CPs
+        db.prepare('DELETE FROM clarification_points WHERE project_id = ?').run(id);
+      }
+
       const cpIds: string[] = [];
+      const existingQuestions = mode === 'refresh'
+        ? new Set((db.prepare("SELECT question FROM clarification_points WHERE project_id = ?").all(id) as { question: string }[]).map(r => r.question))
+        : new Set<string>();
+
       const insertCP = db.prepare(`
         INSERT INTO clarification_points (id, project_id, category, question, reason, suggested_answer, severity, source, confluence_refs)
         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
       `);
       for (const cp of parsed.clarification_points || []) {
+        if (mode === 'refresh' && existingQuestions.has(cp.question)) {
+          cpIds.push('');
+          continue;
+        }
         const cpId = uuid();
         cpIds.push(cpId);
         const confRefs = JSON.stringify(cp.confluence_refs || []);
         insertCP.run(cpId, id, cp.category || 'general', cp.question, cp.reason || '', cp.suggested_answer || '', cp.severity || 'info', cp.source || '', confRefs);
       }
 
-      // Replace annotations (AI-generated only)
+      // Always replace AI annotations
       db.prepare("DELETE FROM annotations WHERE project_id = ? AND author = 'ai'").run(id);
       const coreReqs = requirements.filter(r => coreTypes.has(r.type));
       const insertAnn = db.prepare(`INSERT INTO annotations (id, project_id, requirement_id, highlighted_text, annotation_text, question, suggested_answer, author, linked_clarification_id, severity)
@@ -117,11 +158,13 @@ export async function POST(req: NextRequest, ctx: Ctx) {
         }
       }
 
-      // Replace requirement-sourced rules
-      db.prepare("DELETE FROM business_rules WHERE project_id = ? AND source_type = 'requirement'").run(id);
-      const insertBR = db.prepare(`INSERT INTO business_rules (id, project_id, rule_text, source_type, category) VALUES (?, ?, ?, 'requirement', ?)`);
-      for (const br of parsed.business_rules || []) {
-        insertBR.run(uuid(), id, br.rule_text, br.category || '');
+      if (mode !== 'refresh') {
+        // Full mode: replace requirement-sourced rules
+        db.prepare("DELETE FROM business_rules WHERE project_id = ? AND source_type = 'requirement'").run(id);
+        const insertBR = db.prepare(`INSERT INTO business_rules (id, project_id, rule_text, source_type, category) VALUES (?, ?, ?, 'requirement', ?)`);
+        for (const br of parsed.business_rules || []) {
+          insertBR.run(uuid(), id, br.rule_text, br.category || '');
+        }
       }
 
       db.prepare("UPDATE projects SET status = 'analyzed', updated_at = datetime('now') WHERE id = ?").run(id);
@@ -129,6 +172,7 @@ export async function POST(req: NextRequest, ctx: Ctx) {
     transaction();
 
     return NextResponse.json({
+      mode,
       brd_interpretation: (parsed.brd_interpretation || '').length,
       process_diagram: (parsed.process_diagram || '').length,
       annotations: parsed.annotations?.length || 0,

@@ -9,6 +9,18 @@ export async function PUT(request: NextRequest, ctx: Ctx) {
   const body = await request.json();
   const db = getDb();
 
+  // Revert action: reset CP back to pending
+  if (body.action === 'revert') {
+    const point = db.prepare('SELECT * FROM clarification_points WHERE id = ?').get(pointId) as Record<string, string> | undefined;
+    if (point && point.status === 'converted') {
+      // Remove the associated business rule
+      db.prepare("DELETE FROM business_rules WHERE source_type = 'clarification' AND source_id = ?").run(pointId);
+    }
+    db.prepare("UPDATE clarification_points SET status = 'pending', actual_answer = '', updated_at = datetime('now') WHERE id = ?").run(pointId);
+    // Keep chat history so user can reference it
+    return NextResponse.json(db.prepare('SELECT * FROM clarification_points WHERE id = ?').get(pointId));
+  }
+
   if (body.actual_answer !== undefined) {
     const newStatus = body.status || 'answered';
     db.prepare(`
@@ -20,7 +32,6 @@ export async function PUT(request: NextRequest, ctx: Ctx) {
     if (newStatus === 'converted') {
       const point = db.prepare('SELECT * FROM clarification_points WHERE id = ?').get(pointId) as Record<string, string>;
       if (point) {
-        // Build rule text from conversation if available, otherwise use actual_answer
         let ruleText = body.actual_answer || '';
         if (body.use_conversation) {
           const msgs = db.prepare(

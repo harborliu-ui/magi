@@ -9,7 +9,7 @@ import {
   CheckCircle, Clock, ArrowRightCircle, MessageSquare, AlertTriangle,
   Pencil, Copy, ChevronDown, ChevronRight, Sparkles, Send, Layers,
   ShieldAlert, Info, AlertCircle, AlertOctagon, Globe, ExternalLink,
-  HighlighterIcon,
+  HighlighterIcon, RotateCcw, RefreshCw,
 } from 'lucide-react';
 import Modal from '@/components/Modal';
 import { useToast } from '@/components/Toast';
@@ -47,6 +47,8 @@ export default function ProjectWorkspace({ params }: { params: Promise<{ id: str
   const [pageLoading, setPageLoading] = useState(true);
   const [error, setError] = useState('');
   const [showConfirmModal, setShowConfirmModal] = useState<{ title: string; message: string; onConfirm: () => void } | null>(null);
+  const [progressSteps, setProgressSteps] = useState<string[]>([]);
+  const [progressIdx, setProgressIdx] = useState(0);
 
   const loadProject = useCallback(() => { fetch(`/api/projects/${id}`).then(r => r.json()).then(setProject); }, [id]);
   const loadReqs = useCallback(() => { fetch(`/api/projects/${id}/requirements`).then(r => r.json()).then(setRequirements); }, [id]);
@@ -69,6 +71,28 @@ export default function ProjectWorkspace({ params }: { params: Promise<{ id: str
       fetch(`/api/projects/${id}/annotations`).then(r => r.json()).then(setAnnotations),
     ]).finally(() => setPageLoading(false));
   }, [id]);
+
+  const startProgress = useCallback((steps: string[]) => {
+    setProgressSteps(steps);
+    setProgressIdx(0);
+    setLoading(true);
+    setError('');
+  }, []);
+
+  const stopProgress = useCallback(() => {
+    setProgressSteps([]);
+    setProgressIdx(0);
+    setLoading(false);
+  }, []);
+
+  // Auto-advance progress steps on a timer
+  useEffect(() => {
+    if (progressSteps.length === 0 || progressIdx >= progressSteps.length - 1) return;
+    const delays = [2500, 3500, 5000, 8000, 12000];
+    const delay = delays[Math.min(progressIdx, delays.length - 1)];
+    const timer = setTimeout(() => setProgressIdx(i => Math.min(i + 1, progressSteps.length - 1)), delay);
+    return () => clearTimeout(timer);
+  }, [progressSteps, progressIdx]);
 
   const pendingCount = clarifications.filter(c => c.status === 'pending').length;
   const criticalCount = clarifications.filter(c => c.severity === 'critical').length;
@@ -168,21 +192,26 @@ export default function ProjectWorkspace({ params }: { params: Promise<{ id: str
         {tab === 'analysis' && (
           <AnalysisTab projectId={id} requirements={requirements} summary={summary} clarifications={clarifications}
             rules={rules} annotations={annotations} loading={loading} toast={toast}
-            onAnalyze={async () => {
-              if (hasAnalysis) {
-                setShowConfirmModal({ title: '重新分析', message: '重新分析将覆盖当前的 BRD 解读、流程图、标注和所有待确认点（已手动添加的业务规则不受影响）。确定继续？', onConfirm: doAnalyze });
+            onAnalyze={async (mode?: 'full' | 'refresh') => {
+              const isRefresh = mode === 'refresh';
+              if (!isRefresh && hasAnalysis) {
+                setShowConfirmModal({ title: '全新分析', message: '全新分析将覆盖当前的 BRD 解读、流程图、标注和所有待确认点（已手动添加的业务规则不受影响）。确定继续？', onConfirm: () => doAnalyze('full') });
                 return;
               }
-              doAnalyze();
-              async function doAnalyze() {
-                setShowConfirmModal(null); setLoading(true); setError('');
+              doAnalyze(mode || 'full');
+              async function doAnalyze(m: string) {
+                setShowConfirmModal(null);
+                startProgress(m === 'refresh'
+                  ? ['正在加载已确认的业务规则…', '正在获取知识库上下文…', '正在请求模型更新解读…', '正在等待模型反馈…', '正在写入更新结果…']
+                  : ['正在加载需求文档…', '正在获取知识库上下文…', '正在请求模型分析…', '正在等待模型反馈…', '正在解析分析结果…']
+                );
                 try {
-                  const res = await fetch(`/api/projects/${id}/analyze`, { method: 'POST' });
+                  const res = await fetch(`/api/projects/${id}/analyze?mode=${m}`, { method: 'POST' });
                   if (!res.ok) { const d = await res.json(); throw new Error(d.error); }
                   loadSummary(); loadClars(); loadRules(); loadProject(); loadAnnotations();
-                  toast('success', '业务分析完成');
+                  toast('success', m === 'refresh' ? '已基于确认信息更新解读' : '业务分析完成');
                 } catch (e) { setError(e instanceof Error ? e.message : String(e)); }
-                setLoading(false);
+                stopProgress();
               }
             }}
             onReloadSummary={loadSummary} onReloadClars={() => { loadClars(); loadRules(); }}
@@ -198,14 +227,15 @@ export default function ProjectWorkspace({ params }: { params: Promise<{ id: str
               }
               doGenerate();
               async function doGenerate() {
-                setShowConfirmModal(null); setLoading(true); setError('');
+                setShowConfirmModal(null);
+                startProgress(['正在加载业务分析结果…', '正在组装系统上下文…', '正在请求模型生成高阶方案…', '正在等待模型反馈…', '正在解析架构设计…']);
                 try {
                   const res = await fetch(`/api/projects/${id}/hld`, { method: 'POST' });
                   if (!res.ok) { const d = await res.json(); throw new Error(d.error); }
                   loadHld(); loadProject();
                   toast('success', '高阶方案生成完成');
                 } catch (e) { setError(e instanceof Error ? e.message : String(e)); }
-                setLoading(false);
+                stopProgress();
               }
             }}
             onReload={() => { loadHld(); loadProject(); }}
@@ -221,14 +251,15 @@ export default function ProjectWorkspace({ params }: { params: Promise<{ id: str
               }
               doGenerate();
               async function doGenerate() {
-                setShowConfirmModal(null); setLoading(true); setError('');
+                setShowConfirmModal(null);
+                startProgress(['正在加载业务规则与方案设计…', '正在获取 PRD 模板…', '正在请求模型生成 PRD…', '正在等待模型反馈…', '正在格式化文档…']);
                 try {
                   const res = await fetch(`/api/projects/${id}/prd`, { method: 'POST' });
                   if (!res.ok) { const d = await res.json(); throw new Error(d.error); }
                   loadPrd(); loadProject();
                   toast('success', 'PRD 生成完成');
                 } catch (e) { setError(e instanceof Error ? e.message : String(e)); }
-                setLoading(false);
+                stopProgress();
               }
             }}
             onReload={loadPrd} onGoToStep3={() => setTab('hld')}
@@ -249,6 +280,47 @@ export default function ProjectWorkspace({ params }: { params: Promise<{ id: str
           </div>
         </div>
       </Modal>
+
+      {/* Progress overlay */}
+      {progressSteps.length > 0 && (
+        <div className="fixed inset-0 bg-black/40 backdrop-blur-sm z-50 flex items-center justify-center">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full mx-4 p-8">
+            <div className="flex items-center gap-3 mb-6">
+              <div className="w-10 h-10 rounded-xl bg-primary/10 flex items-center justify-center">
+                <Loader2 className="w-5 h-5 text-primary animate-spin" />
+              </div>
+              <div>
+                <h3 className="text-[15px] font-semibold text-content">正在处理中</h3>
+                <p className="text-xs text-content-tertiary">请稍候，AI 正在工作…</p>
+              </div>
+            </div>
+            <div className="space-y-3">
+              {progressSteps.map((step, i) => (
+                <div key={i} className={`flex items-center gap-3 transition-all duration-500 ${
+                  i < progressIdx ? 'opacity-60' : i === progressIdx ? 'opacity-100' : 'opacity-30'
+                }`}>
+                  <div className="w-5 h-5 flex items-center justify-center shrink-0">
+                    {i < progressIdx ? (
+                      <CheckCircle className="w-4 h-4 text-positive" />
+                    ) : i === progressIdx ? (
+                      <Loader2 className="w-4 h-4 text-primary animate-spin" />
+                    ) : (
+                      <div className="w-2 h-2 rounded-full bg-content-tertiary/30" />
+                    )}
+                  </div>
+                  <span className={`text-sm ${i === progressIdx ? 'text-content font-medium' : 'text-content-secondary'}`}>
+                    {step}
+                  </span>
+                </div>
+              ))}
+            </div>
+            <div className="mt-6 h-1.5 bg-surface-hover rounded-full overflow-hidden">
+              <div className="h-full bg-primary rounded-full transition-all duration-1000 ease-out"
+                style={{ width: `${Math.max(5, ((progressIdx + 1) / progressSteps.length) * 100)}%` }} />
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
@@ -974,7 +1046,7 @@ function AnalysisTab({ projectId, requirements, summary, clarifications, rules, 
   projectId: string; requirements: Requirement[]; summary: AnalysisSummary | null;
   clarifications: ClarificationPoint[]; rules: BusinessRule[]; annotations: Annotation[]; loading: boolean;
   toast: (type: 'success' | 'error' | 'info', message: string) => void;
-  onAnalyze: () => void; onReloadSummary: () => void; onReloadClars: () => void; onReloadRules: () => void;
+  onAnalyze: (mode?: 'full' | 'refresh') => void; onReloadSummary: () => void; onReloadClars: () => void; onReloadRules: () => void;
   onReloadAnnotations: () => void; onGoToStep1: () => void;
 }) {
   const [showAddRule, setShowAddRule] = useState(false);
@@ -997,6 +1069,22 @@ function AnalysisTab({ projectId, requirements, summary, clarifications, rules, 
   const deleteRule = async (rule: BusinessRule) => {
     await fetch(`/api/projects/${projectId}/rules`, { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ rule_id: rule.id }) });
     onReloadRules(); toast('info', '规则已删除');
+  };
+
+  const revertRuleToCp = async (rule: BusinessRule) => {
+    if (rule.source_type === 'clarification' && rule.source_id) {
+      await fetch(`/api/projects/${projectId}/clarifications/${rule.source_id}`, {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'revert' }),
+      });
+    } else {
+      await fetch(`/api/projects/${projectId}/rules`, {
+        method: 'DELETE', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ rule_id: rule.id }),
+      });
+    }
+    onReloadRules(); onReloadClars();
+    toast('info', '已回退');
   };
 
   const [addingAnnotation, setAddingAnnotation] = useState(false);
@@ -1075,12 +1163,21 @@ function AnalysisTab({ projectId, requirements, summary, clarifications, rules, 
           <h2 className="text-[15px] font-semibold">业务分析</h2>
           <p className="text-xs text-content-tertiary mt-0.5">AI 解读 BRD/FRF、绘制流程图、标注问题点、识别待确认点</p>
         </div>
-        <button onClick={onAnalyze} disabled={loading || !hasCore}
-          className="flex items-center gap-2 bg-primary hover:bg-primary-hover disabled:opacity-40 text-white px-4 py-2 rounded-lg text-[13px] font-medium transition-colors"
-          title={!hasCore ? '请先在 Step 1 添加 BRD/FRF 文档' : ''}>
-          {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
-          {loading ? '分析中...' : hasContent ? '重新分析' : '开始分析'}
-        </button>
+        <div className="flex items-center gap-2">
+          {hasContent && (
+            <button onClick={() => onAnalyze('refresh')} disabled={loading || !hasCore}
+              className="flex items-center gap-2 bg-white border border-primary text-primary hover:bg-primary/5 disabled:opacity-40 px-3 py-2 rounded-lg text-[13px] font-medium transition-colors"
+              title="保留已确认的待确认点和规则，更新 BRD 解读和流程图">
+              <RefreshCw className="w-3.5 h-3.5" /> 更新解读
+            </button>
+          )}
+          <button onClick={() => onAnalyze('full')} disabled={loading || !hasCore}
+            className="flex items-center gap-2 bg-primary hover:bg-primary-hover disabled:opacity-40 text-white px-4 py-2 rounded-lg text-[13px] font-medium transition-colors"
+            title={!hasCore ? '请先在 Step 1 添加 BRD/FRF 文档' : ''}>
+            {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
+            {loading ? '分析中...' : hasContent ? '全新分析' : '开始分析'}
+          </button>
+        </div>
       </div>
 
       {!hasContent ? (
@@ -1215,6 +1312,12 @@ function AnalysisTab({ projectId, requirements, summary, clarifications, rules, 
                     <span className="text-[10px] text-content-tertiary whitespace-nowrap">
                       {rule.source_type === 'clarification' ? '来自确认' : rule.source_type === 'requirement' ? '来自需求' : '手动'}
                     </span>
+                    {rule.source_type === 'clarification' && (
+                      <button onClick={() => revertRuleToCp(rule)}
+                        className="text-content-tertiary hover:text-caution opacity-0 group-hover:opacity-100 transition-opacity p-0.5 rounded hover:bg-amber-50" title="回退为待确认点">
+                        <RotateCcw className="w-3.5 h-3.5" />
+                      </button>
+                    )}
                     <button onClick={() => deleteRule(rule)}
                       className="text-content-tertiary hover:text-negative opacity-0 group-hover:opacity-100 transition-opacity p-0.5 rounded hover:bg-negative-subtle" title="删除规则">
                       <Trash2 className="w-3.5 h-3.5" />
@@ -1304,6 +1407,15 @@ function ClarCard({ point, projectId, onReload, toast }: {
     setSuggestedRule('');
     onReload();
     toast('success', '已确认并转为业务规则');
+  };
+
+  const revertToPending = async () => {
+    await fetch(`/api/projects/${projectId}/clarifications/${point.id}`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action: 'revert' }),
+    });
+    onReload();
+    toast('info', '已回退为待确认');
   };
 
   const statusIcon = {
@@ -1420,7 +1532,7 @@ function ClarCard({ point, projectId, onReload, toast }: {
             </div>
           )}
 
-          {/* Converted state */}
+          {/* Converted / Answered state with revert */}
           {point.status === 'converted' && point.actual_answer && (
             <div className="bg-positive-subtle rounded-lg px-3 py-2 text-xs flex items-start gap-2">
               <ArrowRightCircle className="w-3.5 h-3.5 text-positive mt-0.5 shrink-0" />
@@ -1428,6 +1540,18 @@ function ClarCard({ point, projectId, onReload, toast }: {
                 <div className="text-[10px] font-medium text-positive mb-0.5">已转为业务规则</div>
                 <span className="text-content-secondary">{point.actual_answer}</span>
               </div>
+              <button onClick={revertToPending} title="回退为待确认"
+                className="shrink-0 text-content-tertiary hover:text-caution transition-colors">
+                <RotateCcw className="w-3.5 h-3.5" />
+              </button>
+            </div>
+          )}
+          {point.status === 'answered' && point.actual_answer && (
+            <div className="flex justify-end">
+              <button onClick={revertToPending}
+                className="flex items-center gap-1 text-[11px] text-content-tertiary hover:text-caution transition-colors">
+                <RotateCcw className="w-3 h-3" /> 回退为待确认
+              </button>
             </div>
           )}
 
