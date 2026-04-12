@@ -4,7 +4,7 @@ import { getDb } from '@/lib/db';
 import { callLLM } from '@/lib/llm';
 import { PRD_SYSTEM_PROMPT, buildPRDUserPrompt } from '@/lib/prompts';
 import { buildProjectContext } from '@/lib/context-builder';
-import { getConfluencePageContent } from '@/lib/confluence';
+import { getConfluencePageContent, resolveConfluencePageId } from '@/lib/confluence';
 import { v4 as uuid } from 'uuid';
 
 type Ctx = { params: Promise<{ id: string }> };
@@ -33,9 +33,12 @@ export async function POST(_req: NextRequest, ctx: Ctx) {
 
   // Resolve PRD template — prefer Confluence template if configured
   let templateContent = '';
-  const confTemplateId = (db.prepare("SELECT value FROM settings WHERE key = 'prd_template_confluence_id'").get() as { value: string } | undefined)?.value;
-  if (confTemplateId) {
-    templateContent = await getConfluencePageContent(confTemplateId);
+  const confTemplateInput = (db.prepare("SELECT value FROM settings WHERE key = 'prd_template_confluence_id'").get() as { value: string } | undefined)?.value;
+  if (confTemplateInput) {
+    const pageId = await resolveConfluencePageId(confTemplateInput);
+    if (pageId) {
+      templateContent = await getConfluencePageContent(pageId);
+    }
   }
   if (!templateContent) {
     const tmpl = db.prepare('SELECT content FROM prd_templates WHERE is_default = 1').get() as { content: string } | undefined;

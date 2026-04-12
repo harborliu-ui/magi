@@ -287,13 +287,16 @@ export default function SettingsPage() {
           <div className="flex items-center justify-between mb-4">
             <h2 className="text-sm font-semibold">PRD 模板配置</h2>
             <button onClick={async () => {
-              const tid = (settings.prd_template_confluence_id || '').trim();
-              if (!tid) { toast('error', '请先填入模板页面 ID'); return; }
+              const raw = (settings.prd_template_confluence_id || '').trim();
+              if (!raw) { toast('error', '请先填入 Confluence 模板页面链接'); return; }
               setTemplateTest({ loading: true });
               try {
-                const res = await fetch(`/api/confluence/children?page_id=${tid}`);
-                if (!res.ok) throw new Error('无法访问该页面');
-                setTemplateTest({ loading: false, result: { success: true, message: `页面 ID ${tid} 可访问` } });
+                const res = await fetch(`/api/confluence/resolve-page?input=${encodeURIComponent(raw)}`);
+                const data = await res.json();
+                if (!res.ok || !data.page_id) throw new Error(data.error || '无法解析该链接');
+                const checkRes = await fetch(`/api/confluence/children?page_id=${data.page_id}`);
+                if (!checkRes.ok) throw new Error('页面存在但无法读取内容');
+                setTemplateTest({ loading: false, result: { success: true, message: `✓ 已识别页面「${data.title || data.page_id}」` } });
               } catch (e) {
                 setTemplateTest({ loading: false, result: { success: false, message: e instanceof Error ? e.message : '模板页面不可达' } });
               }
@@ -305,15 +308,12 @@ export default function SettingsPage() {
           </div>
           <div className="space-y-4">
             <div>
-              <label className="block text-sm font-medium text-content-secondary mb-1.5">Confluence 模板页面 ID</label>
+              <label className="block text-sm font-medium text-content-secondary mb-1.5">Confluence 模板页面链接</label>
               <input type="text" value={settings.prd_template_confluence_id || ''}
-                onChange={e => {
-                  const val = e.target.value.replace(/[^\d]/g, '');
-                  update('prd_template_confluence_id', val);
-                }}
-                placeholder="123456（可选，仅数字）"
+                onChange={e => update('prd_template_confluence_id', e.target.value)}
+                placeholder="粘贴 Confluence 页面 URL，如 https://confluence.shopee.io/display/SPACE/Page+Title"
                 className="w-full bg-white border border-edge rounded-lg px-3 py-2.5 text-sm text-content placeholder:text-content-tertiary" />
-              <p className="text-xs text-content-tertiary mt-1">填入一个 Confluence 页面的 ID 作为 PRD 模板。留空则使用系统内置默认模板。</p>
+              <p className="text-xs text-content-tertiary mt-1">粘贴 Confluence 页面链接作为 PRD 模板（也支持直接填写页面 ID）。留空则使用系统内置默认模板。</p>
             </div>
           </div>
           <TestResult status={templateTest} />

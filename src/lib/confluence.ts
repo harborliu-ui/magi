@@ -21,6 +21,34 @@ export function parseConfluenceUrl(url: string): { spaceKey: string; title: stri
   return null;
 }
 
+/**
+ * Extracts a numeric page ID from any Confluence URL or raw ID string.
+ * Supports:
+ *   - viewpage.action?pageId=123456
+ *   - /pages/123456/Title
+ *   - /display/SPACE/Title (resolves via API)
+ *   - Raw numeric string "123456"
+ */
+export async function resolveConfluencePageId(input: string): Promise<string | null> {
+  const trimmed = input.trim();
+  if (!trimmed) return null;
+
+  if (/^\d+$/.test(trimmed)) return trimmed;
+
+  const vpMatch = trimmed.match(/[?&]pageId=(\d+)/);
+  if (vpMatch) return vpMatch[1];
+
+  const pagesMatch = trimmed.match(/\/pages\/(\d+)/);
+  if (pagesMatch) return pagesMatch[1];
+
+  const parsed = parseConfluenceUrl(trimmed);
+  if (parsed) {
+    return getPageIdBySpaceAndTitle(parsed.spaceKey, parsed.title);
+  }
+
+  return null;
+}
+
 export async function getPageIdBySpaceAndTitle(spaceKey: string, title: string): Promise<string | null> {
   const settings = getConfluenceSettings();
   if (!settings.confluence_base_url || !settings.confluence_token) return null;
