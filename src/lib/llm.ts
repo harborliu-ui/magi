@@ -2,8 +2,8 @@ import OpenAI from 'openai';
 import { getDb } from './db';
 import { v4 as uuid } from 'uuid';
 
-const LLM_TIMEOUT_MS = 120_000;
-const MAX_RETRIES = 2;
+const LLM_TIMEOUT_MS = 180_000;
+const MAX_RETRIES = 3;
 const RETRYABLE_STATUS_CODES = new Set([429, 500, 502, 503, 504]);
 
 function getSettings(): Record<string, string> {
@@ -55,7 +55,9 @@ function logLlmCall(
 function isRetryableError(err: unknown): boolean {
   if (err instanceof Error) {
     const msg = err.message;
-    if (/timeout|ETIMEDOUT|ECONNRESET|ECONNREFUSED|socket hang up/i.test(msg)) return true;
+    const name = err.name || '';
+    if (name === 'AbortError' || /aborted|timeout|ETIMEDOUT|ECONNRESET|ECONNREFUSED|socket hang up/i.test(msg)) return true;
+    if (/rate.limit/i.test(msg)) return true;
     const statusMatch = msg.match(/\b(4\d{2}|5\d{2})\b/);
     if (statusMatch && RETRYABLE_STATUS_CODES.has(Number(statusMatch[1]))) return true;
   }
@@ -136,7 +138,10 @@ export async function callLLM(
 
   for (let attempt = 0; attempt <= MAX_RETRIES; attempt++) {
     if (attempt > 0) {
-      const delay = Math.min(1000 * Math.pow(2, attempt - 1) + Math.random() * 500, 8000);
+      const is429 = lastError && /429|rate.limit/i.test(lastError.message);
+      const baseDelay = is429 ? 30_000 : 1000 * Math.pow(2, attempt - 1);
+      const delay = Math.min(baseDelay + Math.random() * 2000, is429 ? 60_000 : 8000);
+      console.warn(`[LLM] Retry ${attempt}/${MAX_RETRIES} in ${Math.round(delay / 1000)}s${is429 ? ' (rate-limited)' : ''}…`);
       await sleep(delay);
     }
 

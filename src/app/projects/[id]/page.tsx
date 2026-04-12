@@ -88,7 +88,7 @@ export default function ProjectWorkspace({ params }: { params: Promise<{ id: str
   // Auto-advance progress steps on a timer
   useEffect(() => {
     if (progressSteps.length === 0 || progressIdx >= progressSteps.length - 1) return;
-    const delays = [2500, 3500, 5000, 8000, 12000];
+    const delays = [2500, 4000, 8000, 15000, 30000, 45000];
     const delay = delays[Math.min(progressIdx, delays.length - 1)];
     const timer = setTimeout(() => setProgressIdx(i => Math.min(i + 1, progressSteps.length - 1)), delay);
     return () => clearTimeout(timer);
@@ -252,7 +252,7 @@ export default function ProjectWorkspace({ params }: { params: Promise<{ id: str
               doGenerate();
               async function doGenerate() {
                 setShowConfirmModal(null);
-                startProgress(['正在加载业务规则与方案设计…', '正在获取 PRD 模板…', '正在请求模型生成 PRD…', '正在等待模型反馈…', '正在格式化文档…']);
+                startProgress(['正在加载业务规则与方案设计…', '正在获取 PRD 模板…', '正在请求模型生成 PRD…', '正在等待模型反馈（PRD 内容较多，可能需要 1-3 分钟）…', '正在格式化文档…']);
                 try {
                   const res = await fetch(`/api/projects/${id}/prd`, { method: 'POST' });
                   if (!res.ok) { const d = await res.json(); throw new Error(d.error); }
