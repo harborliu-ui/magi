@@ -1,0 +1,87 @@
+@import "tailwindcss";
+
+@theme inline {
+  --color-base: #f5f7fa;
+  --color-surface: #ffffff;
+  --color-surface-hover: #f0f2f5;
+  --color-surface-active: #e8ecf1;
+  --color-edge: #e5e8eb;
+  --color-edge-light: #f0f2f5;
+  --color-content: #1a1a2e;
+  --color-content-secondary: #4a5568;
+  --color-content-tertiary: #94a3b8;
+  --color-primary: #2563eb;
+  --color-primary-hover: #1d4ed8;
+  --color-primary-subtle: rgba(37, 99, 235, 0.06);
+  --color-positive: #059669;
+  --color-positive-subtle: rgba(5, 150, 105, 0.06);
+  --color-caution: #d97706;
+  --color-caution-subtle: rgba(217, 119, 6, 0.06);
+  --color-negative: #dc2626;
+  --color-negative-subtle: rgba(220, 38, 38, 0.06);
+  --color-purple: #7c3aed;
+  --color-purple-subtle: rgba(124, 58, 237, 0.06);
+  --font-sans: var(--font-geist-sans), system-ui, -apple-system, sans-serif;
+  --font-mono: var(--font-geist-mono), ui-monospace, monospace;
+}
+
+body {
+  background: var(--color-base);
+  color: var(--color-content);
+  font-family: var(--font-sans);
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-edge) transparent;
+}
+
+::selection {
+  background: var(--color-primary);
+  color: white;
+}
+
+input, textarea, select { outline: none; }
+input:focus, textarea:focus, select:focus {
+  border-color: var(--color-primary) !important;
+  box-shadow: 0 0 0 2px rgba(37, 99, 235, 0.15);
+}
+
+.markdown-body h1 { font-size: 1.5rem; font-weight: 700; margin: 1.5rem 0 0.75rem; color: var(--color-content); }
+.markdown-body h2 { font-size: 1.25rem; font-weight: 600; margin: 1.25rem 0 0.625rem; color: var(--color-content); }
+.markdown-body h3 { font-size: 1.1rem; font-weight: 600; margin: 1rem 0 0.5rem; }
+.markdown-body p { margin: 0.5rem 0; line-height: 1.75; }
+.markdown-body ul, .markdown-body ol { margin: 0.5rem 0; padding-left: 1.5rem; }
+.markdown-body li { margin: 0.25rem 0; }
+.markdown-body code { background: var(--color-surface-active); padding: 0.125rem 0.375rem; border-radius: 0.25rem; font-size: 0.875rem; }
+.markdown-body pre { background: #f8fafc; border: 1px solid var(--color-edge); padding: 1rem; border-radius: 0.5rem; overflow-x: auto; margin: 0.75rem 0; }
+.markdown-body pre code { background: none; padding: 0; }
+.markdown-body table { width: 100%; border-collapse: collapse; margin: 0.75rem 0; font-size: 0.9rem; }
+.markdown-body th, .markdown-body td { border: 1px solid var(--color-edge); padding: 0.5rem 0.75rem; text-align: left; }
+.markdown-body th { background: var(--color-surface-hover); font-weight: 600; }
+.markdown-body blockquote { border-left: 3px solid var(--color-primary); padding-left: 1rem; color: var(--color-content-secondary); margin: 0.75rem 0; }
+
+/* Google Doc rendered content */
+.gdoc-rendered { font-size: 0.875rem; line-height: 1.75; color: var(--color-content-secondary); }
+.gdoc-rendered .gdoc-content { max-width: 100%; }
+.gdoc-rendered h1, .gdoc-rendered h2, .gdoc-rendered h3, .gdoc-rendered h4 { color: var(--color-content); margin: 1em 0 0.5em; }
+.gdoc-rendered h1 { font-size: 1.4em; font-weight: 700; }
+.gdoc-rendered h2 { font-size: 1.2em; font-weight: 600; }
+.gdoc-rendered h3 { font-size: 1.05em; font-weight: 600; }
+.gdoc-rendered p { margin: 0.35em 0; }
+.gdoc-rendered ul, .gdoc-rendered ol { margin: 0.5em 0; padding-left: 1.5em; }
+.gdoc-rendered li { margin: 0.2em 0; }
+.gdoc-rendered table { border-collapse: collapse; margin: 0.75em 0; width: 100%; font-size: 0.9em; }
+.gdoc-rendered td, .gdoc-rendered th { border: 1px solid var(--color-edge); padding: 0.4em 0.6em; }
+.gdoc-rendered th { background: var(--color-surface-hover); font-weight: 600; }
+.gdoc-rendered img { max-width: 100%; height: auto; border-radius: 4px; margin: 0.5em 0; }
+.gdoc-rendered a { color: var(--color-primary); text-decoration: underline; }
+.gdoc-rendered mark[data-ann-id] { cursor: pointer; transition: all 0.15s ease; }
+.gdoc-rendered mark[data-ann-id]:hover { filter: brightness(0.92); }
+
+@keyframes spin { to { transform: rotate(360deg); } }
+.animate-spin { animation: spin 1s linear infinite; }
+@keyframes pulse { 50% { opacity: 0.5; } }
+.animate-pulse { animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite; }
+@keyframes slideIn { from { opacity: 0; transform: translateX(20px); } to { opacity: 1; transform: translateX(0); } }
+.animate-slide-in { animation: slideIn 0.25s ease-out; }
