@@ -2,21 +2,66 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getDb } from '@/lib/db';
 import { resolveConfluencePageId } from '@/lib/confluence';
 
+function escapeXhtml(text: string): string {
+  return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+function inlineFormat(text: string): string {
+  const tokens: string[] = [];
+  let remaining = text;
+  while (remaining.length > 0) {
+    const codeMatch = remaining.match(/^(.*?)`(.+?)`([\s\S]*)$/);
+    if (codeMatch) {
+      if (codeMatch[1]) tokens.push(formatPlain(codeMatch[1]));
+      tokens.push(`<code>${escapeXhtml(codeMatch[2])}</code>`);
+      remaining = codeMatch[3];
+      continue;
+    }
+    tokens.push(formatPlain(remaining));
+    break;
+  }
+  return tokens.join('');
+}
+
+function formatPlain(text: string): string {
+  let s = escapeXhtml(text);
+  s = s.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+  s = s.replace(/\*(.+?)\*/g, '<em>$1</em>');
+  s = s.replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2">$1</a>');
+  return s;
+}
+
+function isTableSeparator(line: string): boolean {
+  return /^\|[\s:|-]+\|$/.test(line.trim());
+}
+
+function parseTableRow(line: string, tag: 'th' | 'td'): string {
+  const cells = line.trim().replace(/^\|/, '').replace(/\|$/, '').split('|');
+  return '<tr>' + cells.map(c => `<${tag}>${inlineFormat(c.trim())}</${tag}>`).join('') + '</tr>';
+}
+
 function markdownToConfluenceStorage(md: string): string {
   const lines = md.split('\n');
   const result: string[] = [];
   let inCodeBlock = false;
   let codeBuffer: string[] = [];
   let inList: 'ul' | 'ol' | null = null;
+  let inTable = false;
+
+  const closeList = () => {
+    if (inList) { result.push(inList === 'ul' ? '</ul>' : '</ol>'); inList = null; }
+  };
+  const closeTable = () => {
+    if (inTable) { result.push('</tbody></table>'); inTable = false; }
+  };
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
 
     if (line.startsWith('```')) {
-      if (!inCodeBlock) {
-        inCodeBlock = true;
-        codeBuffer = [];
-      } else {
+      closeList(); closeTable();
+      if (!inCodeBlock) { inCodeBlock = true; codeBuffer = []; }
+      else {
         inCodeBlock = false;
         result.push(`<ac:structured-macro ac:name="code"><ac:plain-text-body><![CDATA[${codeBuffer.join('\n')}]]></ac:plain-text-body></ac:structured-macro>`);
       }
@@ -25,45 +70,62 @@ function markdownToConfluenceStorage(md: string): string {
     if (inCodeBlock) { codeBuffer.push(line); continue; }
 
     const trimmed = line.trim();
-    if (!trimmed) {
-      if (inList) { result.push(inList === 'ul' ? '</ul>' : '</ol>'); inList = null; }
-      continue;
+
+    // Table detection
+    if (trimmed.startsWith('|') && trimmed.endsWith('|')) {
+      closeList();
+      const nextLine = i + 1 < lines.length ? lines[i + 1]?.trim() : '';
+      if (!inTable && isTableSeparator(nextLine)) {
+        // Header row — start table
+        inTable = true;
+        result.push('<table><thead>' + parseTableRow(trimmed, 'th') + '</thead><tbody>');
+        i++; // skip separator row
+        continue;
+      }
+      if (inTable) {
+        if (isTableSeparator(trimmed)) continue; // skip stray separators
+        result.push(parseTableRow(trimmed, 'td'));
+        continue;
+      }
+      // Standalone pipe-line without header context — treat as paragraph
     }
+
+    if (inTable && !(trimmed.startsWith('|') && trimmed.endsWith('|'))) {
+      closeTable();
+    }
+
+    if (!trimmed) { closeList(); continue; }
 
     const ulMatch = trimmed.match(/^[-*]\s+(.+)$/);
     const olMatch = trimmed.match(/^\d+\.\s+(.+)$/);
 
     if (ulMatch) {
+      closeTable();
       if (inList === 'ol') { result.push('</ol>'); inList = null; }
       if (!inList) { result.push('<ul>'); inList = 'ul'; }
       result.push(`<li>${inlineFormat(ulMatch[1])}</li>`);
       continue;
     }
     if (olMatch) {
+      closeTable();
       if (inList === 'ul') { result.push('</ul>'); inList = null; }
       if (!inList) { result.push('<ol>'); inList = 'ol'; }
       result.push(`<li>${inlineFormat(olMatch[1])}</li>`);
       continue;
     }
 
-    if (inList) { result.push(inList === 'ul' ? '</ul>' : '</ol>'); inList = null; }
+    closeList(); closeTable();
 
     if (trimmed.startsWith('### '))      { result.push(`<h3>${inlineFormat(trimmed.slice(4))}</h3>`); }
     else if (trimmed.startsWith('## '))   { result.push(`<h2>${inlineFormat(trimmed.slice(3))}</h2>`); }
     else if (trimmed.startsWith('# '))    { result.push(`<h1>${inlineFormat(trimmed.slice(2))}</h1>`); }
     else if (trimmed.startsWith('> '))    { result.push(`<blockquote><p>${inlineFormat(trimmed.slice(2))}</p></blockquote>`); }
+    else if (trimmed.startsWith('---'))   { result.push('<hr/>'); }
     else                                  { result.push(`<p>${inlineFormat(trimmed)}</p>`); }
   }
 
-  if (inList) result.push(inList === 'ul' ? '</ul>' : '</ol>');
+  closeList(); closeTable();
   return result.join('\n');
-}
-
-function inlineFormat(text: string): string {
-  return text
-    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
-    .replace(/\*(.+?)\*/g, '<em>$1</em>')
-    .replace(/`(.+?)`/g, '<code>$1</code>');
 }
 
 export async function POST(req: NextRequest) {
