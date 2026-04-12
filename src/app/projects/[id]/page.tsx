@@ -1462,11 +1462,16 @@ function ClarCard({ point, projectId, onReload, toast }: {
         <div className="px-4 pb-4 space-y-3">
           {point.reason && <p className="text-xs text-content-tertiary leading-relaxed">{point.reason}</p>}
 
-          {point.suggested_answer && point.status === 'pending' && chatMsgs.length === 0 && (
-            <div className="bg-surface-hover rounded-lg px-3 py-2 text-xs">
-              <span className="text-content-tertiary">AI 建议答案：</span>
-              <span className="text-content-secondary">{point.suggested_answer}</span>
-              <button onClick={() => setInput(point.suggested_answer)} className="ml-2 text-primary hover:underline text-[11px] font-medium">采纳为回复</button>
+          {point.suggested_answer && point.status === 'pending' && (
+            <div className="bg-surface-hover rounded-lg px-3 py-2 text-xs flex items-start gap-2">
+              <div className="flex-1">
+                <span className="text-content-tertiary">AI 建议：</span>
+                <span className="text-content-secondary">{point.suggested_answer}</span>
+              </div>
+              <button onClick={() => { setSuggestedRule(point.suggested_answer); setShowConvertModal(true); }}
+                className="shrink-0 px-2 py-1 bg-positive hover:bg-positive/80 text-white text-[11px] rounded-md font-medium whitespace-nowrap">
+                采纳为规则
+              </button>
             </div>
           )}
 
@@ -1555,24 +1560,30 @@ function ClarCard({ point, projectId, onReload, toast }: {
             </div>
           )}
 
-          {/* Chat input */}
+          {/* Actions & Chat input */}
           {point.status !== 'converted' && (
-            <div className="flex gap-2">
-              <input value={input} onChange={e => setInput(e.target.value)}
-                onKeyDown={e => e.key === 'Enter' && !e.shiftKey && sendMessage()}
-                placeholder={chatMsgs.length === 0 ? '输入你的回答，AI 会与你讨论…' : '继续讨论…'}
-                disabled={sending}
-                className="flex-1 bg-white border border-edge rounded-lg px-3 py-2 text-sm disabled:opacity-50" />
-              <button onClick={sendMessage} disabled={!input.trim() || sending}
-                className="flex items-center gap-1 px-3 py-2 bg-primary hover:bg-primary-hover disabled:opacity-40 text-white text-xs rounded-lg shrink-0">
-                {sending ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Send className="w-3.5 h-3.5" />}
-              </button>
-              {chatMsgs.length > 0 && (
-                <button onClick={() => { setSuggestedRule(point.actual_answer || chatMsgs.filter(m => m.role === 'user').map(m => m.content).join('; ')); setShowConvertModal(true); }}
-                  className="flex items-center gap-1 px-3 py-2 bg-positive hover:bg-positive/80 text-white text-xs rounded-lg shrink-0">
-                  <ArrowRightCircle className="w-3.5 h-3.5" /> 转为规则
+            <div className="space-y-2">
+              <div className="flex gap-2">
+                <input value={input} onChange={e => setInput(e.target.value)}
+                  onKeyDown={e => e.key === 'Enter' && !e.shiftKey && sendMessage()}
+                  placeholder="和 AI 进一步讨论细节…"
+                  disabled={sending}
+                  className="flex-1 bg-white border border-edge rounded-lg px-3 py-2 text-sm disabled:opacity-50" />
+                <button onClick={sendMessage} disabled={!input.trim() || sending}
+                  className="flex items-center gap-1 px-3 py-2 bg-primary hover:bg-primary-hover disabled:opacity-40 text-white text-xs rounded-lg shrink-0">
+                  {sending ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Send className="w-3.5 h-3.5" />}
                 </button>
-              )}
+              </div>
+              <div className="flex justify-end">
+                <button onClick={() => {
+                  const defaultRule = suggestedRule || point.suggested_answer || point.actual_answer
+                    || (chatMsgs.length > 0 ? chatMsgs.filter(m => m.role === 'assistant').slice(-1).map(m => m.content).join('') : point.question);
+                  setSuggestedRule(defaultRule); setShowConvertModal(true);
+                }}
+                  className="flex items-center gap-1 px-3 py-1.5 bg-positive hover:bg-positive/80 text-white text-xs rounded-lg font-medium">
+                  <ArrowRightCircle className="w-3.5 h-3.5" /> 直接转为业务规则
+                </button>
+              </div>
             </div>
           )}
         </div>
