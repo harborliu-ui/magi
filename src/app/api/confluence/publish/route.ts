@@ -1,41 +1,76 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getDb } from '@/lib/db';
+import { resolveConfluencePageId } from '@/lib/confluence';
 
 function markdownToConfluenceStorage(md: string): string {
-  let html = md;
-  html = html.replace(/^### (.+)$/gm, '<h3>$1</h3>');
-  html = html.replace(/^## (.+)$/gm, '<h2>$1</h2>');
-  html = html.replace(/^# (.+)$/gm, '<h1>$1</h1>');
-  html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
-  html = html.replace(/\*(.+?)\*/g, '<em>$1</em>');
-  html = html.replace(/`(.+?)`/g, '<code>$1</code>');
-  html = html.replace(/^- (.+)$/gm, '<li>$1</li>');
-  html = html.replace(/(<li>.*<\/li>\n?)+/g, (m) => `<ul>${m}</ul>`);
-  html = html.replace(/^\d+\. (.+)$/gm, '<li>$1</li>');
-  html = html.replace(/^> (.+)$/gm, '<blockquote><p>$1</p></blockquote>');
-  html = html.replace(/```[\s\S]*?```/g, (m) => {
-    const code = m.replace(/```\w*\n?/g, '').replace(/```/g, '');
-    return `<ac:structured-macro ac:name="code"><ac:plain-text-body><![CDATA[${code}]]></ac:plain-text-body></ac:structured-macro>`;
-  });
-  const lines = html.split('\n');
+  const lines = md.split('\n');
   const result: string[] = [];
-  for (const line of lines) {
-    const trimmed = line.trim();
-    if (!trimmed) continue;
-    if (trimmed.startsWith('<h') || trimmed.startsWith('<ul') || trimmed.startsWith('<ol') ||
-      trimmed.startsWith('<blockquote') || trimmed.startsWith('<ac:') || trimmed.startsWith('<li')) {
-      result.push(trimmed);
-    } else {
-      result.push(`<p>${trimmed}</p>`);
+  let inCodeBlock = false;
+  let codeBuffer: string[] = [];
+  let inList: 'ul' | 'ol' | null = null;
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+
+    if (line.startsWith('```')) {
+      if (!inCodeBlock) {
+        inCodeBlock = true;
+        codeBuffer = [];
+      } else {
+        inCodeBlock = false;
+        result.push(`<ac:structured-macro ac:name="code"><ac:plain-text-body><![CDATA[${codeBuffer.join('\n')}]]></ac:plain-text-body></ac:structured-macro>`);
+      }
+      continue;
     }
+    if (inCodeBlock) { codeBuffer.push(line); continue; }
+
+    const trimmed = line.trim();
+    if (!trimmed) {
+      if (inList) { result.push(inList === 'ul' ? '</ul>' : '</ol>'); inList = null; }
+      continue;
+    }
+
+    const ulMatch = trimmed.match(/^[-*]\s+(.+)$/);
+    const olMatch = trimmed.match(/^\d+\.\s+(.+)$/);
+
+    if (ulMatch) {
+      if (inList === 'ol') { result.push('</ol>'); inList = null; }
+      if (!inList) { result.push('<ul>'); inList = 'ul'; }
+      result.push(`<li>${inlineFormat(ulMatch[1])}</li>`);
+      continue;
+    }
+    if (olMatch) {
+      if (inList === 'ul') { result.push('</ul>'); inList = null; }
+      if (!inList) { result.push('<ol>'); inList = 'ol'; }
+      result.push(`<li>${inlineFormat(olMatch[1])}</li>`);
+      continue;
+    }
+
+    if (inList) { result.push(inList === 'ul' ? '</ul>' : '</ol>'); inList = null; }
+
+    if (trimmed.startsWith('### '))      { result.push(`<h3>${inlineFormat(trimmed.slice(4))}</h3>`); }
+    else if (trimmed.startsWith('## '))   { result.push(`<h2>${inlineFormat(trimmed.slice(3))}</h2>`); }
+    else if (trimmed.startsWith('# '))    { result.push(`<h1>${inlineFormat(trimmed.slice(2))}</h1>`); }
+    else if (trimmed.startsWith('> '))    { result.push(`<blockquote><p>${inlineFormat(trimmed.slice(2))}</p></blockquote>`); }
+    else                                  { result.push(`<p>${inlineFormat(trimmed)}</p>`); }
   }
+
+  if (inList) result.push(inList === 'ul' ? '</ul>' : '</ol>');
   return result.join('\n');
+}
+
+function inlineFormat(text: string): string {
+  return text
+    .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+    .replace(/\*(.+?)\*/g, '<em>$1</em>')
+    .replace(/`(.+?)`/g, '<code>$1</code>');
 }
 
 export async function POST(req: NextRequest) {
   const body = await req.json();
-  const { project_id, parent_page_id, title, space_key } = body as {
-    project_id: string; parent_page_id: string; title: string; space_key?: string;
+  const { project_id, parent_page_url, title, space_key } = body as {
+    project_id: string; parent_page_url?: string; title: string; space_key?: string;
+    parent_page_id?: string; // legacy compat
   };
 
   const db = getDb();
@@ -48,6 +83,17 @@ export async function POST(req: NextRequest) {
 
   const prd = db.prepare('SELECT * FROM prds WHERE project_id = ?').get(project_id) as { content: string; id: string } | undefined;
   if (!prd) return NextResponse.json({ error: 'PRD 未找到' }, { status: 404 });
+
+  // Resolve parent page ID from URL or legacy field
+  const parentInput = parent_page_url || body.parent_page_id || '';
+  let parentPageId = '';
+  if (parentInput) {
+    const resolved = await resolveConfluencePageId(parentInput);
+    if (!resolved) {
+      return NextResponse.json({ error: '无法从该链接解析出父页面，请检查 URL 格式' }, { status: 400 });
+    }
+    parentPageId = resolved;
+  }
 
   const storageContent = markdownToConfluenceStorage(prd.content);
   const sk = space_key || settings.confluence_space_key;
@@ -64,8 +110,8 @@ export async function POST(req: NextRequest) {
     },
   };
 
-  if (parent_page_id) {
-    payload.ancestors = [{ id: parent_page_id }];
+  if (parentPageId) {
+    payload.ancestors = [{ id: parentPageId }];
   }
 
   try {

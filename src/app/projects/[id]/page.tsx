@@ -1958,58 +1958,40 @@ function ConfluencePublishModal({ projectId, projectName, toast, onClose, onPubl
   toast: (type: 'success' | 'error' | 'info', message: string) => void;
   onClose: () => void; onPublished: () => void;
 }) {
-  const [pages, setPages] = useState<{ id: string; title: string; hasChildren: boolean }[]>([]);
-  const [breadcrumb, setBreadcrumb] = useState<{ id: string; title: string }[]>([]);
-  const [selectedParent, setSelectedParent] = useState<string>('');
-  const [selectedParentTitle, setSelectedParentTitle] = useState<string>('');
+  const [parentUrl, setParentUrl] = useState('');
+  const [parentVerified, setParentVerified] = useState<{ title: string; pageId: string } | null>(null);
+  const [verifying, setVerifying] = useState(false);
   const [title, setTitle] = useState(`${projectName} PRD`);
-  const [loadingPages, setLoadingPages] = useState(true);
   const [publishing, setPublishing] = useState(false);
   const [confirmPublish, setConfirmPublish] = useState(false);
   const [error, setError] = useState('');
 
-  const loadChildren = useCallback(async (pageId?: string) => {
-    setLoadingPages(true);
+  const verifyParent = async () => {
+    if (!parentUrl.trim()) { setParentVerified(null); return; }
+    setVerifying(true); setError('');
     try {
-      const url = pageId ? `/api/confluence/children?page_id=${pageId}` : '/api/confluence/children';
-      const res = await fetch(url);
-      if (!res.ok) { const d = await res.json(); throw new Error(d.error); }
+      const res = await fetch(`/api/confluence/resolve-page?input=${encodeURIComponent(parentUrl.trim())}`);
       const data = await res.json();
-      setPages(data);
-      if (pageId) {
-        setSelectedParent(pageId);
-      }
-    } catch (e) { setError(e instanceof Error ? e.message : String(e)); }
-    setLoadingPages(false);
-  }, []);
-
-  useEffect(() => { loadChildren(); }, [loadChildren]);
-
-  const navigateInto = (page: { id: string; title: string }) => {
-    setBreadcrumb(prev => [...prev, page]);
-    loadChildren(page.id);
-  };
-
-  const navigateBack = (index: number) => {
-    const newBc = breadcrumb.slice(0, index);
-    setBreadcrumb(newBc);
-    if (newBc.length === 0) {
-      setSelectedParent('');
-      loadChildren();
-    } else {
-      const last = newBc[newBc.length - 1];
-      setSelectedParent(last.id);
-      loadChildren(last.id);
+      if (!res.ok || !data.page_id) throw new Error(data.error || '无法解析该链接');
+      setParentVerified({ title: data.title, pageId: data.page_id });
+    } catch (e) {
+      setParentVerified(null);
+      setError(e instanceof Error ? e.message : '链接解析失败');
     }
+    setVerifying(false);
   };
 
   const publish = async () => {
     if (!title.trim()) return;
+    if (parentUrl.trim() && !parentVerified) {
+      toast('error', '请先验证父页面链接');
+      return;
+    }
     setPublishing(true); setError('');
     try {
       const res = await fetch('/api/confluence/publish', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ project_id: projectId, parent_page_id: selectedParent, title }),
+        body: JSON.stringify({ project_id: projectId, parent_page_url: parentUrl.trim(), title }),
       });
       if (!res.ok) { const d = await res.json(); throw new Error(d.error); }
       const data = await res.json();
@@ -2023,7 +2005,7 @@ function ConfluencePublishModal({ projectId, projectName, toast, onClose, onPubl
   };
 
   return (
-    <Modal open={true} onClose={onClose} title="发布到 Confluence" maxWidth="max-w-2xl">
+    <Modal open={true} onClose={onClose} title="发布到 Confluence" maxWidth="max-w-lg">
       <div className="space-y-4">
         <div>
           <label className="block text-sm font-medium text-content-secondary mb-1.5">
@@ -2034,49 +2016,24 @@ function ConfluencePublishModal({ projectId, projectName, toast, onClose, onPubl
         </div>
 
         <div>
-          <label className="block text-sm font-medium text-content-secondary mb-1.5">选择父页面（发布目录）</label>
-
-          {/* Breadcrumb */}
-          <div className="flex items-center gap-1 text-xs text-content-tertiary mb-2 flex-wrap">
-            <button onClick={() => navigateBack(0)} className="hover:text-primary">根目录</button>
-            {breadcrumb.map((bc, i) => (
-              <span key={bc.id} className="flex items-center gap-1">
-                <span>/</span>
-                <button onClick={() => navigateBack(i + 1)} className="hover:text-primary">{bc.title}</button>
-              </span>
-            ))}
+          <label className="block text-sm font-medium text-content-secondary mb-1.5">父页面链接（发布目录）</label>
+          <div className="flex gap-2">
+            <input value={parentUrl}
+              onChange={e => { setParentUrl(e.target.value); setParentVerified(null); }}
+              placeholder="粘贴 Confluence 页面 URL，留空则发布到 Space 根目录"
+              className="flex-1 bg-white border border-edge rounded-lg px-3 py-2.5 text-sm" />
+            <button onClick={verifyParent} disabled={verifying || !parentUrl.trim()}
+              className="shrink-0 px-3 py-2 bg-white border border-edge rounded-lg text-xs font-medium text-primary hover:bg-surface-hover disabled:opacity-40 transition-colors">
+              {verifying ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : '验证'}
+            </button>
           </div>
-
-          <div className="border border-edge rounded-lg max-h-60 overflow-y-auto">
-            {loadingPages ? (
-              <div className="p-4 text-center"><Loader2 className="w-4 h-4 animate-spin inline mr-1.5" />加载中…</div>
-            ) : pages.length === 0 ? (
-              <div className="p-4 text-center text-xs text-content-tertiary">
-                {breadcrumb.length > 0 ? '该页面下没有子页面，PRD 将创建在此目录下' : '无法加载页面列表，请检查 Confluence 配置'}
-              </div>
-            ) : (
-              <div>
-                {pages.map(p => (
-                  <div key={p.id}
-                    className={`flex items-center gap-3 px-4 py-2.5 text-sm cursor-pointer hover:bg-surface-hover border-b border-edge-light last:border-0 ${
-                      selectedParent === p.id ? 'bg-primary-subtle' : ''
-                    }`}
-                    onClick={() => { setSelectedParent(p.id); setSelectedParentTitle(p.title); }}>
-                    <FileText className="w-4 h-4 text-content-tertiary shrink-0" />
-                    <span className="flex-1 truncate">{p.title}</span>
-                    <button onClick={e => { e.stopPropagation(); navigateInto(p); }}
-                      className="text-content-tertiary hover:text-primary p-1" title="进入子目录">
-                      <ChevronRight className="w-3.5 h-3.5" />
-                    </button>
-                  </div>
-                ))}
-              </div>
-            )}
-          </div>
-          {selectedParent && (
-            <p className="text-xs text-content-tertiary mt-1.5">
-              将在「{selectedParentTitle || '所选页面'}」下创建新页面
+          {parentVerified && (
+            <p className="text-xs text-positive mt-1.5 flex items-center gap-1">
+              <CheckCircle className="w-3 h-3" /> 将在「{parentVerified.title}」下创建新页面
             </p>
+          )}
+          {!parentUrl.trim() && (
+            <p className="text-xs text-content-tertiary mt-1">留空将发布到 Confluence Space 根目录下</p>
           )}
         </div>
 
@@ -2089,7 +2046,7 @@ function ConfluencePublishModal({ projectId, projectName, toast, onClose, onPubl
         {confirmPublish && (
           <div className="bg-blue-50 border border-blue-200 rounded-lg p-3 space-y-2">
             <p className="text-sm text-content-secondary">
-              即将在{selectedParent ? `「${selectedParentTitle}」` : '根目录'}下创建页面 <span className="font-medium text-content">「{title}」</span>
+              即将在{parentVerified ? `「${parentVerified.title}」` : 'Space 根目录'}下创建页面 <span className="font-medium text-content">「{title}」</span>
             </p>
             <div className="flex justify-end gap-2">
               <button onClick={() => setConfirmPublish(false)} className="px-3 py-1.5 text-xs text-content-secondary">返回修改</button>
@@ -2104,7 +2061,7 @@ function ConfluencePublishModal({ projectId, projectName, toast, onClose, onPubl
 
         <div className="flex justify-end gap-3 pt-2">
           <button onClick={onClose} className="px-4 py-2 text-sm text-content-secondary">取消</button>
-          <button onClick={() => setConfirmPublish(true)} disabled={publishing || !title.trim()}
+          <button onClick={() => setConfirmPublish(true)} disabled={publishing || !title.trim() || (!!parentUrl.trim() && !parentVerified)}
             className="flex items-center gap-2 px-4 py-2 bg-blue-600 hover:bg-blue-700 disabled:opacity-40 text-white text-sm font-medium rounded-lg">
             {publishing && <Loader2 className="w-4 h-4 animate-spin" />}
             {publishing ? '发布中…' : '发布'}
