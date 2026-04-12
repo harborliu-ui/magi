@@ -19,7 +19,7 @@
 ### Step 1：下载项目
 
 ```bash
-git clone https://github.com/prd-magi/magi.git
+git clone https://github.com/harborliu-ui/magi.git
 cd magi
 ```
 

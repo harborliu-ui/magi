@@ -7,7 +7,7 @@
 ### 1. 安装和启动
 
 ```bash
-git clone https://github.com/prd-magi/magi.git
+git clone https://github.com/harborliu-ui/magi.git
 cd magi
 npm install
 npm run dev
