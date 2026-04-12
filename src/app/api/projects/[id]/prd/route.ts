@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { logError } from '@/lib/error-logger';
+import { logError, sanitizeErrorMessage } from '@/lib/error-logger';
 import { getDb } from '@/lib/db';
 import { callLLM } from '@/lib/llm';
 import { PRD_SYSTEM_PROMPT, buildPRDUserPrompt } from '@/lib/prompts';
@@ -87,7 +87,7 @@ export async function POST(_req: NextRequest, ctx: Ctx) {
       severity: 'critical',
       context: { projectId: id },
     });
-    return NextResponse.json({ error: String(err) }, { status: 500 });
+    return NextResponse.json({ error: sanitizeErrorMessage(err) }, { status: 500 });
   }
 }
 

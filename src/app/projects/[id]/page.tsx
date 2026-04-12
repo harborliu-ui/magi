@@ -1244,12 +1244,67 @@ function AnalysisTab({ projectId, requirements, summary, clarifications, rules, 
   );
 }
 
+interface CpChatMsg { id: string; role: 'user' | 'assistant'; content: string; metadata?: string; created_at: string }
+
 function ClarCard({ point, projectId, onReload, toast }: {
   point: ClarificationPoint; projectId: string; onReload: () => void;
   toast: (type: 'success' | 'error' | 'info', message: string) => void;
 }) {
-  const [answer, setAnswer] = useState(point.actual_answer || '');
-  const [editing, setEditing] = useState(false);
+  const [expanded, setExpanded] = useState(point.status === 'pending');
+  const [chatMsgs, setChatMsgs] = useState<CpChatMsg[]>([]);
+  const [input, setInput] = useState('');
+  const [sending, setSending] = useState(false);
+  const [showConvertModal, setShowConvertModal] = useState(false);
+  const [suggestedRule, setSuggestedRule] = useState('');
+  const chatEndRef = useRef<HTMLDivElement>(null);
+
+  const loadChat = useCallback(() => {
+    fetch(`/api/projects/${projectId}/clarifications/${point.id}/chat`).then(r => r.json()).then(setChatMsgs).catch(() => {});
+  }, [projectId, point.id]);
+
+  useEffect(() => { if (expanded) loadChat(); }, [expanded, loadChat]);
+  useEffect(() => { chatEndRef.current?.scrollIntoView({ behavior: 'smooth' }); }, [chatMsgs]);
+
+  const sendMessage = async () => {
+    if (!input.trim() || sending) return;
+    const msg = input.trim();
+    setInput('');
+    setSending(true);
+    try {
+      const res = await fetch(`/api/projects/${projectId}/clarifications/${point.id}/chat`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: msg }),
+      });
+      let data: Record<string, unknown>;
+      try {
+        data = await res.json();
+      } catch {
+        toast('error', `服务端返回异常 (${res.status})，请检查错误日志`);
+        return;
+      }
+      if (!res.ok) { toast('error', (data.error as string) || '发送失败'); return; }
+      loadChat();
+      onReload();
+      if (data.is_conclusive && data.suggested_rule) {
+        setSuggestedRule(data.suggested_rule as string);
+      }
+    } catch (err) {
+      toast('error', String(err));
+    } finally {
+      setSending(false);
+    }
+  };
+
+  const convertToRule = async (ruleText: string) => {
+    await fetch(`/api/projects/${projectId}/clarifications/${point.id}`, {
+      method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ actual_answer: ruleText, status: 'converted', use_conversation: true, rule_text: ruleText }),
+    });
+    setShowConvertModal(false);
+    setSuggestedRule('');
+    onReload();
+    toast('success', '已确认并转为业务规则');
+  };
 
   const statusIcon = {
     pending: <Clock className="w-3.5 h-3.5 text-caution" />,
@@ -1265,36 +1320,41 @@ function ClarCard({ point, projectId, onReload, toast }: {
 
   const sev = severityBadge[point.severity || 'info'];
 
-  const submit = async (status: 'answered' | 'converted') => {
-    await fetch(`/api/projects/${projectId}/clarifications/${point.id}`, {
-      method: 'PUT', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ actual_answer: answer, status }),
-    });
-    setEditing(false); onReload();
-    toast('success', status === 'converted' ? '已确认并转为规则' : '回答已保存');
-  };
-
   return (
-    <div className={`bg-white border rounded-xl px-4 py-3 ${
+    <div className={`bg-white border rounded-xl overflow-hidden ${
       point.severity === 'critical' ? 'border-red-200 bg-red-50/30' :
       point.status === 'pending' ? 'border-caution/30' : point.status === 'converted' ? 'border-positive/20' : 'border-edge'
     }`}>
-      <div className="flex items-start gap-2.5">
+      {/* Header — always visible */}
+      <div className="px-4 py-3 flex items-start gap-2.5 cursor-pointer" onClick={() => setExpanded(!expanded)}>
         <div className="mt-0.5">{statusIcon[point.status]}</div>
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 mb-1">
             <span className={`inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded-full border font-medium ${sev.cls}`}>
               {sev.icon} {sev.label}
             </span>
+            {chatMsgs.length > 0 && (
+              <span className="text-[10px] text-content-tertiary">{chatMsgs.length} 条对话</span>
+            )}
           </div>
           <p className="text-sm font-medium">{point.question}</p>
-          {point.reason && <p className="text-xs text-content-tertiary mt-1 leading-relaxed">{point.reason}</p>}
+          {point.reason && !expanded && <p className="text-xs text-content-tertiary mt-1 leading-relaxed line-clamp-1">{point.reason}</p>}
+        </div>
+        <div className="mt-1 text-content-tertiary">
+          {expanded ? <ChevronDown className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
+        </div>
+      </div>
 
-          {point.suggested_answer && point.status === 'pending' && (
-            <div className="mt-2 bg-surface-hover rounded-lg px-3 py-2 text-xs">
-              <span className="text-content-tertiary">建议答案：</span>
+      {/* Expanded content */}
+      {expanded && (
+        <div className="px-4 pb-4 space-y-3">
+          {point.reason && <p className="text-xs text-content-tertiary leading-relaxed">{point.reason}</p>}
+
+          {point.suggested_answer && point.status === 'pending' && chatMsgs.length === 0 && (
+            <div className="bg-surface-hover rounded-lg px-3 py-2 text-xs">
+              <span className="text-content-tertiary">AI 建议答案：</span>
               <span className="text-content-secondary">{point.suggested_answer}</span>
-              <button onClick={() => { setAnswer(point.suggested_answer); setEditing(true); }} className="ml-2 text-primary hover:underline text-[11px] font-medium">采纳</button>
+              <button onClick={() => setInput(point.suggested_answer)} className="ml-2 text-primary hover:underline text-[11px] font-medium">采纳为回复</button>
             </div>
           )}
 
@@ -1304,7 +1364,7 @@ function ClarCard({ point, projectId, onReload, toast }: {
               const refs = JSON.parse(point.confluence_refs || '[]') as { title: string; excerpt: string; relevance?: string }[];
               if (refs.length === 0) return null;
               return (
-                <div className="mt-2 space-y-1.5">
+                <div className="space-y-1.5">
                   <div className="text-[10px] font-medium text-content-tertiary flex items-center gap-1">
                     <Globe className="w-3 h-3" /> 相关 Confluence 文档
                   </div>
@@ -1320,29 +1380,96 @@ function ClarCard({ point, projectId, onReload, toast }: {
             } catch { return null; }
           })()}
 
-          {(point.status !== 'pending' && point.actual_answer && !editing) && (
-            <div className="mt-2 bg-positive-subtle rounded-lg px-3 py-2 text-xs flex items-start gap-2">
-              <CheckCircle className="w-3 h-3 text-positive mt-0.5 shrink-0" />
-              <span className="text-content-secondary flex-1">{point.actual_answer}</span>
-              <button onClick={() => setEditing(true)} className="text-content-tertiary hover:text-primary shrink-0"><Pencil className="w-3 h-3" /></button>
-            </div>
-          )}
-
-          {(point.status === 'pending' || editing) && (
-            <div className="mt-2 space-y-2">
-              <textarea value={answer} onChange={e => setAnswer(e.target.value)} rows={2} placeholder="输入你的回答..."
-                className="w-full bg-white border border-edge rounded-lg px-3 py-2 text-sm resize-none" />
-              <div className="flex gap-2">
-                <button onClick={() => submit('answered')} disabled={!answer.trim()}
-                  className="flex items-center gap-1 px-3 py-1.5 bg-primary hover:bg-primary-hover disabled:opacity-40 text-white text-xs rounded-lg"><CheckCircle className="w-3 h-3" /> 确认回答</button>
-                <button onClick={() => submit('converted')} disabled={!answer.trim()}
-                  className="flex items-center gap-1 px-3 py-1.5 bg-positive hover:bg-positive/80 disabled:opacity-40 text-white text-xs rounded-lg"><ArrowRightCircle className="w-3 h-3" /> 确认并转为规则</button>
-                {editing && <button onClick={() => setEditing(false)} className="px-3 py-1.5 text-xs text-content-tertiary">取消</button>}
+          {/* Conversation thread */}
+          {chatMsgs.length > 0 && (
+            <div className="border border-edge rounded-lg bg-surface-hover/30 max-h-80 overflow-y-auto">
+              <div className="p-3 space-y-3">
+                {chatMsgs.map(m => (
+                  <div key={m.id} className={`flex gap-2 ${m.role === 'user' ? 'justify-end' : 'justify-start'}`}>
+                    <div className={`max-w-[85%] rounded-lg px-3 py-2 text-xs leading-relaxed ${
+                      m.role === 'user' ? 'bg-primary text-white' : 'bg-white border border-edge text-content-secondary'
+                    }`}>
+                      {m.role === 'assistant' ? (
+                        <ReactMarkdown remarkPlugins={[remarkGfm]} components={{
+                          p: ({ children }) => <p className="mb-1.5 last:mb-0">{children}</p>,
+                          ul: ({ children }) => <ul className="list-disc pl-4 mb-1.5">{children}</ul>,
+                          ol: ({ children }) => <ol className="list-decimal pl-4 mb-1.5">{children}</ol>,
+                          strong: ({ children }) => <strong className="font-semibold">{children}</strong>,
+                        }}>{m.content}</ReactMarkdown>
+                      ) : m.content}
+                    </div>
+                  </div>
+                ))}
+                <div ref={chatEndRef} />
               </div>
             </div>
           )}
+
+          {/* Suggested rule banner */}
+          {suggestedRule && point.status !== 'converted' && (
+            <div className="bg-green-50 border border-green-200 rounded-lg px-3 py-2 flex items-start gap-2">
+              <CheckCircle className="w-4 h-4 text-green-600 mt-0.5 shrink-0" />
+              <div className="flex-1 text-xs">
+                <div className="font-medium text-green-800 mb-1">AI 建议可形成业务规则：</div>
+                <div className="text-green-700">{suggestedRule}</div>
+              </div>
+              <button onClick={() => { setShowConvertModal(true); }}
+                className="shrink-0 px-2.5 py-1 bg-green-600 hover:bg-green-700 text-white text-[11px] rounded-lg font-medium">
+                确认转为规则
+              </button>
+            </div>
+          )}
+
+          {/* Converted state */}
+          {point.status === 'converted' && point.actual_answer && (
+            <div className="bg-positive-subtle rounded-lg px-3 py-2 text-xs flex items-start gap-2">
+              <ArrowRightCircle className="w-3.5 h-3.5 text-positive mt-0.5 shrink-0" />
+              <div className="flex-1">
+                <div className="text-[10px] font-medium text-positive mb-0.5">已转为业务规则</div>
+                <span className="text-content-secondary">{point.actual_answer}</span>
+              </div>
+            </div>
+          )}
+
+          {/* Chat input */}
+          {point.status !== 'converted' && (
+            <div className="flex gap-2">
+              <input value={input} onChange={e => setInput(e.target.value)}
+                onKeyDown={e => e.key === 'Enter' && !e.shiftKey && sendMessage()}
+                placeholder={chatMsgs.length === 0 ? '输入你的回答，AI 会与你讨论…' : '继续讨论…'}
+                disabled={sending}
+                className="flex-1 bg-white border border-edge rounded-lg px-3 py-2 text-sm disabled:opacity-50" />
+              <button onClick={sendMessage} disabled={!input.trim() || sending}
+                className="flex items-center gap-1 px-3 py-2 bg-primary hover:bg-primary-hover disabled:opacity-40 text-white text-xs rounded-lg shrink-0">
+                {sending ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <Send className="w-3.5 h-3.5" />}
+              </button>
+              {chatMsgs.length > 0 && (
+                <button onClick={() => { setSuggestedRule(point.actual_answer || chatMsgs.filter(m => m.role === 'user').map(m => m.content).join('; ')); setShowConvertModal(true); }}
+                  className="flex items-center gap-1 px-3 py-2 bg-positive hover:bg-positive/80 text-white text-xs rounded-lg shrink-0">
+                  <ArrowRightCircle className="w-3.5 h-3.5" /> 转为规则
+                </button>
+              )}
+            </div>
+          )}
         </div>
-      </div>
+      )}
+
+      {/* Convert to rule modal */}
+      {showConvertModal && (
+        <div className="fixed inset-0 bg-black/30 z-50 flex items-center justify-center" onClick={() => setShowConvertModal(false)}>
+          <div className="bg-white rounded-xl shadow-xl max-w-lg w-full mx-4 p-5" onClick={e => e.stopPropagation()}>
+            <h3 className="text-sm font-semibold mb-3">确认业务规则</h3>
+            <p className="text-xs text-content-secondary mb-3">请确认或编辑以下内容作为最终的业务规则：</p>
+            <textarea value={suggestedRule} onChange={e => setSuggestedRule(e.target.value)} rows={4}
+              className="w-full bg-white border border-edge rounded-lg px-3 py-2 text-sm resize-none mb-3" />
+            <div className="flex justify-end gap-2">
+              <button onClick={() => setShowConvertModal(false)} className="px-4 py-2 text-sm text-content-secondary">取消</button>
+              <button onClick={() => convertToRule(suggestedRule)} disabled={!suggestedRule.trim()}
+                className="px-4 py-2 bg-positive hover:bg-positive/80 disabled:opacity-40 text-white text-sm rounded-lg font-medium">确认转为规则</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

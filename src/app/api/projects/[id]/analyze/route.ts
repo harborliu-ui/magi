@@ -3,7 +3,7 @@ import { getDb } from '@/lib/db';
 import { callLLM } from '@/lib/llm';
 import { ANALYSIS_SYSTEM_PROMPT, buildAnalysisUserPrompt } from '@/lib/prompts';
 import { buildProjectContext } from '@/lib/context-builder';
-import { logError } from '@/lib/error-logger';
+import { logError, sanitizeErrorMessage } from '@/lib/error-logger';
 import { safeJsonParse } from '@/lib/json-repair';
 import { v4 as uuid } from 'uuid';
 
@@ -139,6 +139,6 @@ export async function POST(req: NextRequest, ctx: Ctx) {
   } catch (err) {
     db.prepare("UPDATE projects SET status = 'draft', updated_at = datetime('now') WHERE id = ?").run(id);
     logError({ source: 'analyze/llm', endpoint: `/api/projects/${id}/analyze`, method: 'POST', error: err, severity: 'critical', context: { project_id: id } });
-    return NextResponse.json({ error: String(err), context_log: contextLog }, { status: 500 });
+    return NextResponse.json({ error: sanitizeErrorMessage(err), context_log: contextLog }, { status: 500 });
   }
 }

@@ -11,6 +11,26 @@ interface LogErrorParams {
   severity?: 'error' | 'warning' | 'critical';
 }
 
+/**
+ * Strips potentially sensitive info (API keys, internal URLs) from error
+ * messages before returning them to the client.
+ */
+export function sanitizeErrorMessage(err: unknown): string {
+  let msg = 'Unknown error';
+  if (err instanceof Error) msg = err.message;
+  else if (typeof err === 'string') msg = err;
+  else msg = JSON.stringify(err);
+
+  // Strip API keys that may appear in error messages
+  msg = msg.replace(/(?:api[_-]?key|bearer|token|authorization)[=: ]*['"]?[A-Za-z0-9_\-]{16,}['"]?/gi, '[REDACTED]');
+  // Strip full URLs that may expose internal endpoints
+  msg = msg.replace(/https?:\/\/[^\s"')]+/g, (url) => {
+    try { return new URL(url).hostname; } catch { return '[URL]'; }
+  });
+
+  return msg.slice(0, 500);
+}
+
 export function logError(params: LogErrorParams): string {
   const id = uuid();
   const db = getDb();

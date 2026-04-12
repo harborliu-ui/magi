@@ -135,7 +135,7 @@ function initSchema(db: Database.Database) {
     CREATE TABLE IF NOT EXISTS chat_messages (
       id TEXT PRIMARY KEY,
       project_id TEXT NOT NULL,
-      phase TEXT NOT NULL CHECK(phase IN ('analysis','hld','prd')),
+      phase TEXT NOT NULL CHECK(phase IN ('analysis','hld','prd','clarification')),
       section TEXT DEFAULT '',
       role TEXT NOT NULL CHECK(role IN ('user','assistant')),
       content TEXT NOT NULL,
@@ -282,6 +282,40 @@ function migrate(db: Database.Database) {
   safeAdd('annotations', 'question', "TEXT DEFAULT ''");
   safeAdd('annotations', 'suggested_answer', "TEXT DEFAULT ''");
   safeAdd('clarification_points', 'confluence_refs', "TEXT DEFAULT '[]'");
+
+  migrateChatMessagesPhaseCheck(db);
+}
+
+function migrateChatMessagesPhaseCheck(db: Database.Database) {
+  try {
+    // Test if 'clarification' phase is accepted by inserting and rolling back
+    const testStmt = db.prepare("INSERT INTO chat_messages (id, project_id, phase, role, content) VALUES ('__migrate_test__', '__test__', 'clarification', 'user', '__test__')");
+    try {
+      testStmt.run();
+      db.prepare("DELETE FROM chat_messages WHERE id = '__migrate_test__'").run();
+      // If we get here, the constraint already allows 'clarification' — nothing to do
+    } catch {
+      // CHECK constraint rejected 'clarification' — need to rebuild the table
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS chat_messages_new (
+          id TEXT PRIMARY KEY,
+          project_id TEXT NOT NULL,
+          phase TEXT NOT NULL CHECK(phase IN ('analysis','hld','prd','clarification')),
+          section TEXT DEFAULT '',
+          role TEXT NOT NULL CHECK(role IN ('user','assistant')),
+          content TEXT NOT NULL,
+          metadata TEXT DEFAULT '{}',
+          created_at TEXT DEFAULT (datetime('now')),
+          FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+        );
+        INSERT INTO chat_messages_new SELECT id, project_id, phase, section, role, content, metadata, created_at FROM chat_messages;
+        DROP TABLE chat_messages;
+        ALTER TABLE chat_messages_new RENAME TO chat_messages;
+      `);
+    }
+  } catch {
+    // Table might not exist yet — initSchema will create it
+  }
 }
 
 export const DEFAULT_PRD_TEMPLATE = `# {{project_name}} PRD

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { logError } from '@/lib/error-logger';
+import { logError, sanitizeErrorMessage } from '@/lib/error-logger';
 import { getDb } from '@/lib/db';
 import { callLLM } from '@/lib/llm';
 import { HLD_SYSTEM_PROMPT, buildHLDUserPrompt } from '@/lib/prompts';
@@ -116,7 +116,7 @@ export async function POST(req: NextRequest, ctx: Ctx) {
       context: { projectId: id },
     });
     db.prepare("UPDATE projects SET status = 'analyzed', updated_at = datetime('now') WHERE id = ?").run(id);
-    return NextResponse.json({ error: String(err) }, { status: 500 });
+    return NextResponse.json({ error: sanitizeErrorMessage(err) }, { status: 500 });
   }
 }
 
