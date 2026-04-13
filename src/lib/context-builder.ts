@@ -27,12 +27,18 @@ export async function buildProjectContext(projectId: string): Promise<BuiltConte
   const contextLog: ContextLog[] = [];
   let systemContext = '';
 
-  const coreTypes = new Set(['brd', 'frf', 'google_doc']);
-  const coreReqs = requirements.filter(r => coreTypes.has(r.type));
-  const refReqs = requirements.filter(r => !coreTypes.has(r.type));
+  const coreReqs = requirements.filter(r => r.type === 'core');
+  const refReqs = requirements.filter(r => r.type === 'reference');
 
-  const coreContent = coreReqs.map(r => `### ${r.name} (${r.type.toUpperCase()})\n${r.content}`).join('\n\n---\n\n');
-  const referenceContent = refReqs.map(r => `### ${r.name}\n${r.content}`).join('\n\n---\n\n');
+  const coreContent = coreReqs.map(r => `### ${r.name}\n${r.content}`).join('\n\n---\n\n');
+  const referenceContent = refReqs.map(r => {
+    let block = `### ${r.name}`;
+    if (r.reference_note) {
+      block += `\n**参考方式说明：** ${r.reference_note}`;
+    }
+    block += `\n${r.content}`;
+    return block;
+  }).join('\n\n---\n\n');
 
   if (system) {
     systemContext = `系统名称: ${system.name}\n`;
@@ -85,7 +91,7 @@ export async function buildProjectContext(projectId: string): Promise<BuiltConte
   const analysisCustomRules = customRulesRow?.value || '';
   contextLog.push({ section: '业务分析自定义规则', included: !!analysisCustomRules, charCount: analysisCustomRules.length });
 
-  contextLog.push({ section: '核心需求文档(BRD/FRF)', included: coreReqs.length > 0, charCount: coreContent.length, detail: `${coreReqs.length} 份` });
+  contextLog.push({ section: '核心需求文档', included: coreReqs.length > 0, charCount: coreContent.length, detail: `${coreReqs.length} 份` });
   contextLog.push({ section: '参考材料', included: refReqs.length > 0, charCount: referenceContent.length, detail: `${refReqs.length} 份` });
   contextLog.push({ section: 'LLM 上下文总长度', included: true, charCount: systemContext.length + coreContent.length + referenceContent.length + analysisCustomRules.length });
 

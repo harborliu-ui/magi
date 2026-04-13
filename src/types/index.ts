@@ -54,14 +54,17 @@ export interface Requirement {
   id: string;
   project_id: string;
   type: RequirementType;
+  source_type: SourceType;
   name: string;
   content: string;
   content_html: string;
   source_url: string;
+  reference_note: string;
   created_at: string;
 }
 
-export type RequirementType = 'brd' | 'frf' | 'reference' | 'link' | 'google_doc';
+export type RequirementType = 'core' | 'reference';
+export type SourceType = 'google_doc' | 'confluence' | 'website' | 'pdf' | 'text';
 
 export interface Annotation {
   id: string;
@@ -251,13 +254,18 @@ export const SEVERITY_LABELS: Record<ClarificationPoint['severity'], string> = {
 };
 
 export const REQUIREMENT_TYPE_LABELS: Record<RequirementType, string> = {
-  brd: 'BRD',
-  frf: 'FRF',
-  reference: '参考材料',
-  link: '外部链接',
+  core: '核心需求',
+  reference: '参考资料',
+};
+
+export const SOURCE_TYPE_LABELS: Record<SourceType, string> = {
   google_doc: 'Google Doc',
+  confluence: 'Confluence',
+  website: '外部网站',
+  pdf: 'PDF 上传',
+  text: '文本输入',
 };
 
 export function isCoreRequirement(type: RequirementType): boolean {
-  return type === 'brd' || type === 'frf' || type === 'google_doc';
+  return type === 'core';
 }

@@ -71,10 +71,12 @@ function initSchema(db: Database.Database) {
     CREATE TABLE IF NOT EXISTS requirements (
       id TEXT PRIMARY KEY,
       project_id TEXT NOT NULL,
-      type TEXT NOT NULL CHECK(type IN ('brd','frf','reference','link','google_doc')),
+      type TEXT NOT NULL CHECK(type IN ('core','reference')),
+      source_type TEXT NOT NULL DEFAULT 'text' CHECK(source_type IN ('google_doc','confluence','website','pdf','text')),
       name TEXT NOT NULL,
       content TEXT DEFAULT '',
       source_url TEXT DEFAULT '',
+      reference_note TEXT DEFAULT '',
       created_at TEXT DEFAULT (datetime('now')),
       FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
     );
@@ -283,7 +285,11 @@ function migrate(db: Database.Database) {
   safeAdd('annotations', 'suggested_answer', "TEXT DEFAULT ''");
   safeAdd('clarification_points', 'confluence_refs', "TEXT DEFAULT '[]'");
 
+  safeAdd('requirements', 'source_type', "TEXT NOT NULL DEFAULT 'text'");
+  safeAdd('requirements', 'reference_note', "TEXT DEFAULT ''");
+
   migrateChatMessagesPhaseCheck(db);
+  migrateRequirementsTypeCheck(db);
 
   db.prepare("UPDATE prd_templates SET content = ?, description = '场景驱动 PRD 模板' WHERE id = 'default-template' AND is_default = 1")
     .run(DEFAULT_PRD_TEMPLATE);
@@ -318,6 +324,52 @@ function migrateChatMessagesPhaseCheck(db: Database.Database) {
     }
   } catch {
     // Table might not exist yet — initSchema will create it
+  }
+}
+
+function migrateRequirementsTypeCheck(db: Database.Database) {
+  try {
+    const testStmt = db.prepare("INSERT INTO requirements (id, project_id, type, source_type, name) VALUES ('__req_migrate_test__', '__test__', 'core', 'text', '__test__')");
+    try {
+      testStmt.run();
+      db.prepare("DELETE FROM requirements WHERE id = '__req_migrate_test__'").run();
+    } catch {
+      db.exec(`
+        CREATE TABLE IF NOT EXISTS requirements_new (
+          id TEXT PRIMARY KEY,
+          project_id TEXT NOT NULL,
+          type TEXT NOT NULL CHECK(type IN ('core','reference')),
+          source_type TEXT NOT NULL DEFAULT 'text' CHECK(source_type IN ('google_doc','confluence','website','pdf','text')),
+          name TEXT NOT NULL,
+          content TEXT DEFAULT '',
+          content_html TEXT DEFAULT '',
+          source_url TEXT DEFAULT '',
+          reference_note TEXT DEFAULT '',
+          created_at TEXT DEFAULT (datetime('now')),
+          FOREIGN KEY (project_id) REFERENCES projects(id) ON DELETE CASCADE
+        );
+      `);
+      const oldRows = db.prepare('SELECT * FROM requirements').all() as Record<string, string>[];
+      const ins = db.prepare('INSERT INTO requirements_new (id, project_id, type, source_type, name, content, content_html, source_url, reference_note, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)');
+      for (const r of oldRows) {
+        const oldType = r.type;
+        let newType: string;
+        let sourceType: string;
+        if (oldType === 'brd' || oldType === 'frf') {
+          newType = 'core'; sourceType = 'text';
+        } else if (oldType === 'google_doc') {
+          newType = 'core'; sourceType = 'google_doc';
+        } else if (oldType === 'link') {
+          newType = 'reference'; sourceType = 'website';
+        } else {
+          newType = 'reference'; sourceType = 'text';
+        }
+        ins.run(r.id, r.project_id, newType, sourceType, r.name, r.content || '', r.content_html || '', r.source_url || '', '', r.created_at);
+      }
+      db.exec('DROP TABLE requirements; ALTER TABLE requirements_new RENAME TO requirements;');
+    }
+  } catch {
+    // Table might not exist yet
   }
 }
 

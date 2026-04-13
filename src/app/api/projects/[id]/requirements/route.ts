@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getDb } from '@/lib/db';
 import { v4 as uuid } from 'uuid';
 import { extractDocIdFromUrl, fetchGoogleDocContent, fetchGoogleDocHtml, isGoogleDocUrl } from '@/lib/google-docs';
+import { getConfluencePageContent, resolveConfluencePageId } from '@/lib/confluence';
 import { logError } from '@/lib/error-logger';
 
 type Ctx = { params: Promise<{ id: string }> };
@@ -21,40 +22,50 @@ export async function POST(request: NextRequest, ctx: Ctx) {
 
   let content = body.content || '';
   let contentHtml = '';
-  let sourceUrl = body.source_url || '';
-  let reqType = body.type || 'brd';
+  const sourceUrl = body.source_url || '';
+  const reqType = body.type || 'core';
+  const sourceType = body.source_type || 'text';
+  const referenceNote = body.reference_note || '';
+  const name = body.name || '';
 
-  if (reqType === 'google_doc' && sourceUrl && isGoogleDocUrl(sourceUrl)) {
-    const docId = extractDocIdFromUrl(sourceUrl);
-    if (!docId) {
+  if (sourceType === 'google_doc' && sourceUrl) {
+    const docUrl = sourceUrl.trim();
+    if (!isGoogleDocUrl(docUrl)) {
       return NextResponse.json({ error: 'Google Doc URL 格式不正确' }, { status: 400 });
+    }
+    const docId = extractDocIdFromUrl(docUrl);
+    if (!docId) {
+      return NextResponse.json({ error: '无法从 URL 中提取文档 ID' }, { status: 400 });
     }
     try {
       content = await fetchGoogleDocContent(docId);
     } catch (err) {
       logError({ source: 'requirements/POST', endpoint: `/api/projects/${id}/requirements`, method: 'POST', error: err, requestBody: body });
-      return NextResponse.json({ error: String(err) }, { status: 500 });
+      return NextResponse.json({ error: `Google Doc 拉取失败: ${err instanceof Error ? err.message : String(err)}` }, { status: 500 });
     }
     try {
       contentHtml = await fetchGoogleDocHtml(docId);
     } catch (err) {
-      logError({ source: 'requirements/POST/html', endpoint: `/api/projects/${id}/requirements`, method: 'POST', error: err, severity: 'warning', context: { note: 'HTML export failed, falling back to plain text' } });
+      logError({ source: 'requirements/POST/html', endpoint: `/api/projects/${id}/requirements`, method: 'POST', error: err, severity: 'warning', context: { note: 'HTML export failed' } });
+    }
+  } else if (sourceType === 'confluence' && sourceUrl) {
+    try {
+      const pageId = await resolveConfluencePageId(sourceUrl.trim());
+      if (!pageId) {
+        return NextResponse.json({ error: '无法从该链接解析出 Confluence 页面' }, { status: 400 });
+      }
+      content = await getConfluencePageContent(pageId);
+      if (!content) {
+        return NextResponse.json({ error: 'Confluence 页面内容为空' }, { status: 400 });
+      }
+    } catch (err) {
+      logError({ source: 'requirements/POST/confluence', endpoint: `/api/projects/${id}/requirements`, method: 'POST', error: err, requestBody: body });
+      return NextResponse.json({ error: `Confluence 拉取失败: ${err instanceof Error ? err.message : String(err)}` }, { status: 500 });
     }
   }
 
-  if (!content && sourceUrl && isGoogleDocUrl(sourceUrl)) {
-    const docId = extractDocIdFromUrl(sourceUrl);
-    if (docId) {
-      try {
-        content = await fetchGoogleDocContent(docId);
-        reqType = 'google_doc';
-        try { contentHtml = await fetchGoogleDocHtml(docId); } catch { /* fall through */ }
-      } catch { /* fall through */ }
-    }
-  }
-
-  db.prepare(`INSERT INTO requirements (id, project_id, type, name, content, content_html, source_url)
-    VALUES (?, ?, ?, ?, ?, ?, ?)`).run(reqId, id, reqType, body.name, content, contentHtml, sourceUrl);
+  db.prepare(`INSERT INTO requirements (id, project_id, type, source_type, name, content, content_html, source_url, reference_note)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(reqId, id, reqType, sourceType, name, content, contentHtml, sourceUrl, referenceNote);
 
   return NextResponse.json(db.prepare('SELECT * FROM requirements WHERE id = ?').get(reqId), { status: 201 });
 }
@@ -68,7 +79,7 @@ export async function PUT(request: NextRequest, ctx: Ctx) {
   if (!req) return NextResponse.json({ error: '文档不存在' }, { status: 404 });
 
   if (body.action === 'refresh_html') {
-    if (!req.source_url || !isGoogleDocUrl(req.source_url)) {
+    if (req.source_type !== 'google_doc' || !req.source_url || !isGoogleDocUrl(req.source_url)) {
       return NextResponse.json({ error: '仅支持 Google Doc 来源的文档刷新格式' }, { status: 400 });
     }
     const docId = extractDocIdFromUrl(req.source_url);

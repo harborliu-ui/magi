@@ -20,10 +20,9 @@ export async function POST(req: NextRequest, ctx: Ctx) {
   if (!project) return NextResponse.json({ error: 'Project not found' }, { status: 404 });
 
   const requirements = db.prepare('SELECT * FROM requirements WHERE project_id = ?').all(id) as Record<string, string>[];
-  const coreTypes = new Set(['brd', 'frf', 'google_doc']);
-  const hasCore = requirements.some(r => coreTypes.has(r.type));
+  const hasCore = requirements.some(r => r.type === 'core');
   if (!hasCore) {
-    return NextResponse.json({ error: '请先添加 BRD 或 FRF 文档' }, { status: 400 });
+    return NextResponse.json({ error: '请先添加核心需求文档' }, { status: 400 });
   }
 
   const { systemContext, coreContent, referenceContent, analysisCustomRules, contextLog } = await buildProjectContext(id);
@@ -143,7 +142,7 @@ export async function POST(req: NextRequest, ctx: Ctx) {
 
       // Always replace AI annotations
       db.prepare("DELETE FROM annotations WHERE project_id = ? AND author = 'ai'").run(id);
-      const coreReqs = requirements.filter(r => coreTypes.has(r.type));
+      const coreReqs = requirements.filter(r => r.type === 'core');
       const insertAnn = db.prepare(`INSERT INTO annotations (id, project_id, requirement_id, highlighted_text, annotation_text, question, suggested_answer, author, linked_clarification_id, severity)
         VALUES (?, ?, ?, ?, ?, ?, ?, 'ai', ?, ?)`);
 

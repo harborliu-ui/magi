@@ -16,10 +16,11 @@ import { useToast } from '@/components/Toast';
 import type {
   Project, Requirement, ClarificationPoint, BusinessRule, PRD,
   AnalysisSummary, HighLevelDesign, ChatMessage, Annotation, AffectedSystem,
+  SourceType,
 } from '@/types';
 import {
   PROJECT_STATUS_LABELS, CLARIFICATION_CATEGORIES, REQUIREMENT_TYPE_LABELS,
-  SEVERITY_LABELS, isCoreRequirement,
+  SOURCE_TYPE_LABELS, SEVERITY_LABELS, isCoreRequirement,
 } from '@/types';
 
 type Tab = 'requirements' | 'analysis' | 'hld' | 'prd';
@@ -884,45 +885,40 @@ function RequirementsTab({ projectId, requirements, onReload, toast }: {
   toast: (type: 'success' | 'error' | 'info', message: string) => void;
 }) {
   const [showAdd, setShowAdd] = useState(false);
-  const [form, setForm] = useState({ type: 'brd' as Requirement['type'], name: '', content: '', source_url: '' });
+  const defaultForm = { type: 'core' as Requirement['type'], source_type: 'google_doc' as SourceType, name: '', content: '', source_url: '', reference_note: '' };
+  const [form, setForm] = useState(defaultForm);
   const [fetchingDoc, setFetchingDoc] = useState(false);
   const [fetchError, setFetchError] = useState('');
 
   const coreReqs = requirements.filter(r => isCoreRequirement(r.type));
   const refReqs = requirements.filter(r => !isCoreRequirement(r.type));
 
+  const needsUrl = form.source_type === 'google_doc' || form.source_type === 'confluence' || form.source_type === 'website';
+  const needsContent = form.source_type === 'pdf' || form.source_type === 'text';
+  const needsFetch = form.source_type === 'google_doc' || form.source_type === 'confluence';
+
+  const canSubmit = form.name.trim() && (
+    needsUrl ? form.source_url.trim() : form.content.trim()
+  );
+
   const add = async () => {
-    if (!form.name.trim()) return;
-    if (form.type === 'google_doc') {
-      if (!form.source_url.trim()) return;
-      setFetchingDoc(true); setFetchError('');
-      try {
-        const res = await fetch(`/api/projects/${projectId}/requirements`, {
-          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(form),
-        });
-        if (!res.ok) { const d = await res.json(); throw new Error(d.error); }
-        setForm({ type: 'brd', name: '', content: '', source_url: '' }); setShowAdd(false); onReload();
-        toast('success', `文档「${form.name}」已添加`);
-      } catch (e) { setFetchError(e instanceof Error ? e.message : String(e)); }
-      setFetchingDoc(false);
-      return;
-    }
-    if (!form.content.trim() && !form.source_url.trim()) return;
-    await fetch(`/api/projects/${projectId}/requirements`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(form) });
-    const savedName = form.name;
-    setForm({ type: 'brd', name: '', content: '', source_url: '' }); setShowAdd(false); onReload();
-    toast('success', `文档「${savedName}」已添加`);
+    if (!canSubmit) return;
+    setFetchingDoc(true); setFetchError('');
+    try {
+      const res = await fetch(`/api/projects/${projectId}/requirements`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(form),
+      });
+      if (!res.ok) { const d = await res.json(); throw new Error(d.error); }
+      const savedName = form.name;
+      setForm(defaultForm); setShowAdd(false); onReload();
+      toast('success', `文档「${savedName}」已添加`);
+    } catch (e) { setFetchError(e instanceof Error ? e.message : String(e)); }
+    setFetchingDoc(false);
   };
 
   const remove = async (req: Requirement) => {
     await fetch(`/api/projects/${projectId}/requirements`, { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ requirement_id: req.id }) });
     onReload(); toast('info', `已删除「${req.name}」`);
-  };
-
-  const typeColors: Record<string, string> = {
-    brd: 'bg-primary-subtle text-primary', frf: 'bg-purple-100 text-purple-700',
-    reference: 'bg-positive-subtle text-positive', link: 'bg-caution-subtle text-caution',
-    google_doc: 'bg-blue-50 text-blue-600',
   };
 
   const renderGroup = (title: string, desc: string, reqs: Requirement[]) => (
@@ -936,18 +932,29 @@ function RequirementsTab({ projectId, requirements, onReload, toast }: {
         <div className="bg-white border border-dashed border-edge rounded-xl p-6 text-center text-xs text-content-tertiary">暂无文档</div>
       ) : (
         <div className="space-y-2">
-          {reqs.map(req => <ReqCard key={req.id} req={req} typeColors={typeColors} onDelete={() => remove(req)} />)}
+          {reqs.map(req => <ReqCard key={req.id} req={req} onDelete={() => remove(req)} />)}
         </div>
       )}
     </div>
   );
+
+  const urlPlaceholders: Record<string, string> = {
+    google_doc: 'https://docs.google.com/document/d/xxxxx/edit',
+    confluence: 'https://confluence.shopee.io/display/SPACE/Page+Title',
+    website: 'https://...',
+  };
+  const urlLabels: Record<string, string> = {
+    google_doc: 'Google Doc 链接',
+    confluence: 'Confluence 页面链接',
+    website: '网站 URL',
+  };
 
   return (
     <div className="max-w-4xl">
       <div className="flex items-center justify-between mb-5">
         <div>
           <h2 className="text-[15px] font-semibold">业务需求文档</h2>
-          <p className="text-xs text-content-tertiary mt-0.5">BRD/FRF 是 AI 分析的核心输入，参考材料仅辅助理解上下文</p>
+          <p className="text-xs text-content-tertiary mt-0.5">核心需求是 AI 分析的主要输入，参考资料辅助 AI 理解上下文</p>
         </div>
         <button onClick={() => setShowAdd(true)} className="flex items-center gap-1.5 bg-primary hover:bg-primary-hover text-white px-3.5 py-2 rounded-lg text-[13px] font-medium transition-colors">
           <Plus className="w-4 h-4" /> 添加文档
@@ -955,8 +962,8 @@ function RequirementsTab({ projectId, requirements, onReload, toast }: {
       </div>
 
       <div className="space-y-6">
-        {renderGroup('核心需求文档', 'BRD / FRF — AI 将深入分析', coreReqs)}
-        {renderGroup('参考材料', '仅辅助 AI 理解上下文', refReqs)}
+        {renderGroup('核心需求', 'BRD / FRF — AI 将深入分析', coreReqs)}
+        {renderGroup('参考资料', '辅助 AI 理解上下文和业务背景', refReqs)}
       </div>
 
       <Modal open={showAdd} onClose={() => { setShowAdd(false); setFetchError(''); }} title="添加业务需求文档" maxWidth="max-w-2xl">
@@ -970,44 +977,64 @@ function RequirementsTab({ projectId, requirements, onReload, toast }: {
               </select>
             </div>
             <div>
-              <label className="block text-sm font-medium text-content-secondary mb-1.5">文档名称 <span className="text-negative">*</span></label>
-              <input value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))}
-                placeholder="例如：Multi-CNPJ BRD" className="w-full bg-white border border-edge rounded-lg px-3 py-2.5 text-sm text-content placeholder:text-content-tertiary" />
+              <label className="block text-sm font-medium text-content-secondary mb-1.5">文件类型</label>
+              <select value={form.source_type} onChange={e => setForm(f => ({ ...f, source_type: e.target.value as SourceType, content: '', source_url: '' }))}
+                className="w-full bg-white border border-edge rounded-lg px-3 py-2.5 text-sm text-content">
+                {Object.entries(SOURCE_TYPE_LABELS).map(([k, v]) => <option key={k} value={k}>{v}</option>)}
+              </select>
             </div>
           </div>
-          {form.type === 'google_doc' ? (
+          <div>
+            <label className="block text-sm font-medium text-content-secondary mb-1.5">文档名称 <span className="text-negative">*</span></label>
+            <input value={form.name} onChange={e => setForm(f => ({ ...f, name: e.target.value }))}
+              placeholder="例如：Multi-CNPJ BRD" className="w-full bg-white border border-edge rounded-lg px-3 py-2.5 text-sm text-content placeholder:text-content-tertiary" />
+          </div>
+
+          {needsUrl && (
             <div>
-              <label className="block text-sm font-medium text-content-secondary mb-1.5">Google Doc 链接 <span className="text-negative">*</span></label>
+              <label className="block text-sm font-medium text-content-secondary mb-1.5">{urlLabels[form.source_type]} <span className="text-negative">*</span></label>
               <input value={form.source_url} onChange={e => setForm(f => ({ ...f, source_url: e.target.value }))}
-                placeholder="https://docs.google.com/document/d/xxxxx/edit"
+                placeholder={urlPlaceholders[form.source_type] || 'https://...'}
                 className="w-full bg-white border border-edge rounded-lg px-3 py-2.5 text-sm text-content placeholder:text-content-tertiary" />
-              {fetchError && (
-                <div className="flex items-center gap-2 p-2.5 mt-2 rounded-lg bg-red-50 border border-red-200 text-sm text-red-600">
-                  <AlertTriangle className="w-4 h-4 shrink-0" /> {fetchError}
-                </div>
+              {form.source_type === 'website' && (
+                <p className="text-[11px] text-content-tertiary mt-1">外部网站仅记录链接，如需 AI 分析请在下方粘贴内容</p>
               )}
             </div>
-          ) : form.type === 'link' ? (
+          )}
+
+          {(needsContent || form.source_type === 'website') && (
             <div>
-              <label className="block text-sm font-medium text-content-secondary mb-1.5">链接 URL</label>
-              <input value={form.source_url} onChange={e => setForm(f => ({ ...f, source_url: e.target.value }))}
-                placeholder="https://..." className="w-full bg-white border border-edge rounded-lg px-3 py-2.5 text-sm text-content placeholder:text-content-tertiary" />
-            </div>
-          ) : (
-            <div>
-              <label className="block text-sm font-medium text-content-secondary mb-1.5">文档内容 <span className="text-negative">*</span></label>
-              <textarea value={form.content} onChange={e => setForm(f => ({ ...f, content: e.target.value }))} rows={12}
-                placeholder="粘贴 BRD/FRF 文档内容（支持 Markdown）"
+              <label className="block text-sm font-medium text-content-secondary mb-1.5">
+                文档内容 {needsContent && <span className="text-negative">*</span>}
+              </label>
+              <textarea value={form.content} onChange={e => setForm(f => ({ ...f, content: e.target.value }))} rows={10}
+                placeholder={form.source_type === 'pdf' ? '粘贴 PDF 中提取的文本内容' : form.source_type === 'website' ? '（可选）粘贴网页中的关键内容' : '粘贴文档内容（支持 Markdown）'}
                 className="w-full bg-white border border-edge rounded-lg px-3 py-2.5 text-sm text-content placeholder:text-content-tertiary resize-none font-mono" />
             </div>
           )}
+
+          {form.type === 'reference' && (
+            <div>
+              <label className="block text-sm font-medium text-content-secondary mb-1.5">参考方式备注 <span className="text-content-tertiary font-normal">（选填）</span></label>
+              <textarea value={form.reference_note} onChange={e => setForm(f => ({ ...f, reference_note: e.target.value }))} rows={3}
+                placeholder="说明为什么添加这个参考资料，以及希望 AI 如何使用它。&#10;例如：这是之前类似需求的 PRD，请参考其功能设计的结构和数据模型设计思路"
+                className="w-full bg-white border border-edge rounded-lg px-3 py-2.5 text-sm text-content placeholder:text-content-tertiary resize-none" />
+            </div>
+          )}
+
+          {fetchError && (
+            <div className="flex items-center gap-2 p-2.5 rounded-lg bg-red-50 border border-red-200 text-sm text-red-600">
+              <AlertTriangle className="w-4 h-4 shrink-0" /> {fetchError}
+            </div>
+          )}
+
           <div className="flex justify-end gap-3 pt-1">
             <button onClick={() => { setShowAdd(false); setFetchError(''); }} className="px-4 py-2 text-sm text-content-secondary hover:text-content">取消</button>
             <button onClick={add}
-              disabled={fetchingDoc || !form.name.trim() || (form.type === 'google_doc' ? !form.source_url.trim() : (!form.content.trim() && !form.source_url.trim()))}
+              disabled={fetchingDoc || !canSubmit}
               className="flex items-center gap-2 px-4 py-2 bg-primary text-white text-sm font-medium rounded-lg disabled:opacity-40">
               {fetchingDoc && <Loader2 className="w-4 h-4 animate-spin" />}
-              {fetchingDoc ? '拉取中...' : form.type === 'google_doc' ? '拉取并添加' : '添加'}
+              {fetchingDoc ? '拉取中...' : needsFetch ? '拉取并添加' : '添加'}
             </button>
           </div>
         </div>
@@ -1016,16 +1043,25 @@ function RequirementsTab({ projectId, requirements, onReload, toast }: {
   );
 }
 
-function ReqCard({ req, typeColors, onDelete }: { req: Requirement; typeColors: Record<string, string>; onDelete: () => void }) {
+function ReqCard({ req, onDelete }: { req: Requirement; onDelete: () => void }) {
   const [open, setOpen] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+
+  const typeColor = req.type === 'core' ? 'bg-primary-subtle text-primary' : 'bg-positive-subtle text-positive';
+  const sourceColor: Record<string, string> = {
+    google_doc: 'bg-blue-50 text-blue-600', confluence: 'bg-purple-50 text-purple-600',
+    website: 'bg-caution-subtle text-caution', pdf: 'bg-orange-50 text-orange-600', text: 'bg-gray-100 text-gray-600',
+  };
 
   return (
     <div className="bg-white border border-edge rounded-xl overflow-hidden">
       <div className="flex items-center gap-3 px-5 py-3 cursor-pointer hover:bg-surface-hover transition-colors" onClick={() => setOpen(!open)}>
         {open ? <ChevronDown className="w-4 h-4 text-content-tertiary" /> : <ChevronRight className="w-4 h-4 text-content-tertiary" />}
-        <span className={`text-[11px] px-2 py-0.5 rounded-full font-medium ${typeColors[req.type] || 'bg-gray-100 text-gray-600'}`}>
+        <span className={`text-[11px] px-2 py-0.5 rounded-full font-medium ${typeColor}`}>
           {REQUIREMENT_TYPE_LABELS[req.type]}
+        </span>
+        <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${sourceColor[req.source_type] || sourceColor.text}`}>
+          {SOURCE_TYPE_LABELS[req.source_type] || req.source_type}
         </span>
         <span className="font-medium text-sm flex-1">{req.name}</span>
         <span className="text-xs text-content-tertiary">{req.content?.length || 0} 字</span>
@@ -1035,8 +1071,13 @@ function ReqCard({ req, typeColors, onDelete }: { req: Requirement; typeColors: 
         </button>
       </div>
       {open && (
-        <div className="px-5 pb-4 border-t border-edge-light pt-3">
-          {req.source_url && <a href={req.source_url} target="_blank" rel="noopener noreferrer" className="text-sm text-primary hover:underline block mb-2">{req.source_url}</a>}
+        <div className="px-5 pb-4 border-t border-edge-light pt-3 space-y-2">
+          {req.source_url && <a href={req.source_url} target="_blank" rel="noopener noreferrer" className="text-sm text-primary hover:underline block">{req.source_url}</a>}
+          {req.reference_note && (
+            <div className="bg-blue-50 rounded-lg px-3 py-2 text-xs text-blue-700">
+              <span className="font-medium">参考方式：</span>{req.reference_note}
+            </div>
+          )}
           {req.content && <pre className="text-sm text-content-secondary whitespace-pre-wrap max-h-80 overflow-y-auto leading-relaxed">{req.content}</pre>}
         </div>
       )}
@@ -1187,7 +1228,7 @@ function AnalysisTab({ projectId, requirements, summary, clarifications, rules, 
           )}
           <button onClick={() => onAnalyze('full')} disabled={loading || !hasCore}
             className="flex items-center gap-2 bg-primary hover:bg-primary-hover disabled:opacity-40 text-white px-4 py-2 rounded-lg text-[13px] font-medium transition-colors"
-            title={!hasCore ? '请先在 Step 1 添加 BRD/FRF 文档' : ''}>
+            title={!hasCore ? '请先在 Step 1 添加核心需求文档' : ''}>
             {loading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Sparkles className="w-4 h-4" />}
             {loading ? '分析中...' : hasContent ? '全新分析' : '开始分析'}
           </button>
