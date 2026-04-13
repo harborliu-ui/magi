@@ -89,7 +89,7 @@ export default function Sidebar() {
       <div className="h-[52px] flex items-center px-4 border-b border-edge">
         <MagiLogo className="w-6 h-6 mr-2" />
         <span className="text-[15px] font-bold tracking-wider text-content">MAGI</span>
-        <span className="ml-2 text-[10px] px-1.5 py-[1px] rounded bg-primary-subtle text-primary font-semibold tracking-wide">v1.0</span>
+        <span className="ml-2 text-[10px] px-1.5 py-[1px] rounded bg-primary-subtle text-primary font-semibold tracking-wide">v0.1</span>
       </div>
 
       {/* Search */}
@@ -228,7 +228,7 @@ export default function Sidebar() {
 
       {/* Footer */}
       <div className="px-4 py-3 border-t border-edge">
-        <div className="text-[11px] text-content-tertiary">MAGI v1.0 · 本地运行</div>
+        <div className="text-[11px] text-content-tertiary">MAGI v0.1 · 本地运行</div>
       </div>
 
       {/* Create System Modal */}

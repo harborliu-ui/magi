@@ -566,6 +566,7 @@ function AnnotatedContent({ projectId, content, contentHtml, requirementId, anno
   const [refreshingHtml, setRefreshingHtml] = useState(false);
   const [localHtml, setLocalHtml] = useState(contentHtml);
   const contentRef = useRef<HTMLDivElement>(null);
+  const docScrollRef = useRef<HTMLDivElement>(null);
   const commentRefs = useRef<Record<string, HTMLDivElement | null>>({});
 
   const handleMouseUp = () => {
@@ -631,13 +632,26 @@ function AnnotatedContent({ projectId, content, contentHtml, requirementId, anno
 
   const markRefs = useRef<Record<string, HTMLElement | null>>({});
 
+  const sidebarRef = useRef<HTMLDivElement>(null);
+
+  const scrollInContainer = (container: HTMLElement | null, target: HTMLElement, position: ScrollLogicalPosition = 'center') => {
+    if (!container || !target) return;
+    const containerRect = container.getBoundingClientRect();
+    const targetRect = target.getBoundingClientRect();
+    const offset = targetRect.top - containerRect.top + container.scrollTop;
+    const scrollTo = position === 'center'
+      ? offset - containerRect.height / 2 + targetRect.height / 2
+      : offset - 20;
+    container.scrollTo({ top: Math.max(0, scrollTo), behavior: 'smooth' });
+  };
+
   const handleDocClick = (e: React.MouseEvent) => {
     const mark = (e.target as HTMLElement).closest('mark[data-ann-id]');
     if (mark) {
       const annId = mark.getAttribute('data-ann-id');
       setActiveAnnId(annId);
       if (annId && commentRefs.current[annId]) {
-        commentRefs.current[annId]?.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+        scrollInContainer(sidebarRef.current, commentRefs.current[annId]!);
       }
     }
   };
@@ -645,9 +659,9 @@ function AnnotatedContent({ projectId, content, contentHtml, requirementId, anno
   const scrollToHighlight = (annId: string) => {
     const docEl = contentRef.current;
     if (!docEl) return;
-    const mark = docEl.querySelector(`mark[data-ann-id="${annId}"]`);
+    const mark = docEl.querySelector(`mark[data-ann-id="${annId}"]`) as HTMLElement | null;
     if (mark) {
-      mark.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      scrollInContainer(docScrollRef.current, mark);
       mark.classList.add('ring-2', 'ring-primary');
       setTimeout(() => mark.classList.remove('ring-2', 'ring-primary'), 1500);
     }
@@ -795,7 +809,7 @@ function AnnotatedContent({ projectId, content, contentHtml, requirementId, anno
 
       <div className="flex gap-0 relative">
         {/* Left: Document Content */}
-        <div className="flex-1 min-w-0 pr-4 border-r border-edge-light max-h-[75vh] overflow-y-auto">
+        <div ref={docScrollRef} className="flex-1 min-w-0 pr-4 border-r border-edge-light max-h-[75vh] overflow-y-auto">
           {useHtml ? (
             <div ref={contentRef} onMouseUp={handleMouseUp} onClick={handleDocClick}
               className="gdoc-rendered text-sm leading-relaxed"
@@ -831,7 +845,7 @@ function AnnotatedContent({ projectId, content, contentHtml, requirementId, anno
         </div>
 
         {/* Right: Comment Sidebar */}
-        <div className="w-[300px] shrink-0 pl-4 max-h-[75vh] overflow-y-auto">
+        <div ref={sidebarRef} className="w-[300px] shrink-0 pl-4 max-h-[75vh] overflow-y-auto">
           {annotations.length === 0 && (
             <div className="text-center py-8 text-xs text-content-tertiary">
               <HighlighterIcon className="w-6 h-6 mx-auto mb-2 opacity-20" />
@@ -1781,6 +1795,7 @@ function HldSection({ title, desc, content, diagram, projectId, fieldKey, diagra
   const [editing, setEditing] = useState(false);
   const [editContent, setEditContent] = useState(content);
   const hasUnsaved = editing && editContent !== content;
+  const [regenDiagram, setRegenDiagram] = useState(false);
 
   useEffect(() => { setEditContent(content); }, [content]);
 
@@ -1802,6 +1817,23 @@ function HldSection({ title, desc, content, diagram, projectId, fieldKey, diagra
     setSaving(false);
   };
 
+  const regenerateDiagram = async () => {
+    setRegenDiagram(true);
+    try {
+      const res = await fetch(`/api/projects/${projectId}/hld/regenerate-diagram`, {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ section_key: fieldKey }),
+      });
+      const d = await res.json();
+      if (!res.ok) throw new Error(d.error || '图例生成失败');
+      toast('success', d.message || '图例已重新生成');
+      onReload();
+    } catch (e) {
+      toast('error', e instanceof Error ? e.message : '图例生成失败');
+    }
+    setRegenDiagram(false);
+  };
+
   return (
     <div className="bg-white border border-edge rounded-xl overflow-hidden">
       <div className="flex items-center justify-between px-5 py-3 border-b border-edge-light bg-surface-hover">
@@ -1811,6 +1843,14 @@ function HldSection({ title, desc, content, diagram, projectId, fieldKey, diagra
         </div>
         <div className="flex items-center gap-2">
           {hasUnsaved && <span className="text-[10px] text-caution font-medium">未保存</span>}
+          {!confirmed && content && (
+            <button onClick={regenerateDiagram} disabled={regenDiagram || editing}
+              className="flex items-center gap-1 text-xs text-content-secondary hover:text-primary font-medium disabled:opacity-40"
+              title="基于当前文本重新生成图例">
+              {regenDiagram ? <Loader2 className="w-3 h-3 animate-spin" /> : <RefreshCw className="w-3 h-3" />}
+              {regenDiagram ? '生成中…' : '重新生成图例'}
+            </button>
+          )}
           {!confirmed && (
             <button onClick={() => { if (editing) save(); else setEditing(true); }} disabled={saving}
               className="flex items-center gap-1 text-xs text-primary hover:text-primary-hover font-medium disabled:opacity-40">

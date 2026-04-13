@@ -47,13 +47,15 @@ export async function POST(_req: NextRequest, ctx: Ctx) {
 
   const scopeMode = project.scope_mode || 'current_system';
 
-  // If scope_mode is current_system and HLD has affected_systems, filter HLD content
-  let hldContent: { ia: string; sa: string; da: string } | undefined;
+  let hldContent: { ia: string; sa: string; da: string; ia_diagram?: string; sa_diagram?: string; da_diagram?: string } | undefined;
   if (hld) {
     hldContent = {
       ia: hld.information_architecture || '',
       sa: hld.system_architecture || '',
       da: hld.data_architecture || '',
+      ia_diagram: hld.ia_diagram || '',
+      sa_diagram: hld.sa_diagram || '',
+      da_diagram: hld.da_diagram || '',
     };
   }
 

@@ -288,6 +288,37 @@ ${userMessage}
 }
 
 // ========================================================
+// HLD Diagram Regeneration — regenerate diagram from edited text
+// ========================================================
+
+export const HLD_DIAGRAM_REGEN_SYSTEM_PROMPT = `你是一位供应链技术架构师。根据用户给出的架构描述文本，生成对应的 Mermaid 图。
+
+## 图类型规则
+- 信息架构 (information_architecture)：使用 flowchart 或 graph 语法画出页面结构/导航关系
+- 系统架构 (system_architecture)：使用 sequenceDiagram 语法画出系统间交互流程
+- 数据架构 (data_architecture)：使用 erDiagram 语法画出数据模型关系
+
+## 注意
+- 节点和实体的文字不要用括号、引号等 Mermaid 特殊字符
+- 如果描述中明确表示没有变更，返回空字符串
+- 只输出 JSON，不要 markdown code fence
+
+## 输出格式
+{"diagram": "Mermaid 图代码"}`;
+
+export function buildDiagramRegenPrompt(sectionKey: string, textContent: string): string {
+  const sectionLabel = sectionKey === 'information_architecture' ? '信息架构'
+    : sectionKey === 'system_architecture' ? '系统架构' : '数据架构';
+  return `<section_type>${sectionLabel}</section_type>
+
+<architecture_description>
+${textContent}
+</architecture_description>
+
+请根据以上架构描述生成对应的 Mermaid 图。`;
+}
+
+// ========================================================
 // PRD Generation
 // ========================================================
 
@@ -329,12 +360,20 @@ PRD 必须按**业务场景**逐一展开（例如：入库场景、调拨场景
 - **禁止泛化表述**——"支持XX场景"这种一句话带过的写法不可接受，每个场景都要展开
 - **禁止臆造时间计划**——灰度计划、里程碑日期等如果 BRD 未提供，只描述策略思路，不编造具体日期
 
+## 高阶方案设计
+如果 <design_inputs> 中包含高阶方案设计（信息架构、系统架构、数据架构），
+必须将其**完整保留**在 PRD 的"整体设计"章节中，包括：
+- 文字描述内容
+- Mermaid 图（以 \`\`\`mermaid 代码块形式嵌入）
+不需要重新生成或大幅修改，直接引用高阶方案的内容即可。
+
 ## 文档格式要求
 1. 文档头部包含：文档信息表（Jira 链接、文档作者、修改记录）
 2. 包含目录（TOC）
-3. 在整体设计章节，提供一张**各场景信息来源汇总表**（总览各场景中"谁调本系统"和"关键信息从哪来"）
-4. 附录包含：待确认问题汇总、相关 PRD/TD 参考链接
-5. 文档末尾加分隔线
+3. 在整体设计章节，包含高阶方案设计的完整内容（信息架构、系统架构、数据架构及其图例）
+4. 在整体设计章节，提供一张**各场景信息来源汇总表**（总览各场景中"谁调本系统"和"关键信息从哪来"）
+5. 附录包含：待确认问题汇总、相关 PRD/TD 参考链接
+6. 文档末尾加分隔线
 
 ## 输出
 直接输出 Markdown 格式的 PRD 文档。`;
@@ -346,7 +385,7 @@ export function buildPRDUserPrompt(
   answeredClarifications: { question: string; answer: string }[],
   systemContext: string,
   template: string,
-  hldContent?: { ia: string; sa: string; da: string },
+  hldContent?: { ia: string; sa: string; da: string; ia_diagram?: string; sa_diagram?: string; da_diagram?: string },
   scopeMode?: string
 ): string {
   const rulesText = businessRules.map((r, i) => `${i + 1}. ${r}`).join('\n');
@@ -354,7 +393,10 @@ export function buildPRDUserPrompt(
 
   let hldSection = '';
   if (hldContent) {
-    hldSection = `\n## 高阶方案设计（已确认）\n### 信息架构\n${hldContent.ia}\n\n### 系统架构\n${hldContent.sa}\n\n### 数据架构\n${hldContent.da}\n`;
+    const iaBlock = hldContent.ia + (hldContent.ia_diagram ? `\n\n#### 信息架构图\n\`\`\`mermaid\n${hldContent.ia_diagram}\n\`\`\`` : '');
+    const saBlock = hldContent.sa + (hldContent.sa_diagram ? `\n\n#### 系统交互图\n\`\`\`mermaid\n${hldContent.sa_diagram}\n\`\`\`` : '');
+    const daBlock = hldContent.da + (hldContent.da_diagram ? `\n\n#### 数据模型图\n\`\`\`mermaid\n${hldContent.da_diagram}\n\`\`\`` : '');
+    hldSection = `\n## 高阶方案设计（已确认）\n### 信息架构\n${iaBlock}\n\n### 系统架构\n${saBlock}\n\n### 数据架构\n${daBlock}\n`;
   }
 
   let scopeNote = '';
@@ -392,11 +434,12 @@ ${template || '（未提供模板，使用系统默认结构）'}
 请基于 <design_inputs> 中的信息生成完整的 PRD，注意：
 
 1. **结构**：如果提供了 <prd_template>，参考其结构；但核心功能部分必须按业务场景展开，从 BRD 中识别出所有业务场景并逐一详述
-2. **举例**：每个场景的举例必须包含完整的数据表格，展示关键字段在操作前后的数值变化（如 qty=100 → qty=50, reserved_qty=0 → reserved_qty=50），不允许空壳占位
-3. **边界**：严格遵守 <project_info> 中的系统设计原则和边界，不生成超出本系统职责的功能模块
-4. **禁止技术细节**：不要包含 SQL、代码、配置文件等技术实现内容
-5. **不编造**：待确认问题只能来自 BRD 原文或已确认的待确认点，上线计划只描述策略不编造日期
-6. **异常场景**：每个场景都必须覆盖异常/边界情况（取消、失败、部分成功等）
-7. **文档头尾**：包含文档信息表（作者、修改记录）和末尾分隔线
+2. **高阶方案**：将 <design_inputs> 中的高阶方案设计（信息架构、系统架构、数据架构）完整嵌入 PRD 的"整体设计"章节，包括 Mermaid 图
+3. **举例**：每个场景的举例必须包含完整的数据表格，展示关键字段在操作前后的数值变化（如 qty=100 → qty=50, reserved_qty=0 → reserved_qty=50），不允许空壳占位
+4. **边界**：严格遵守 <project_info> 中的系统设计原则和边界，不生成超出本系统职责的功能模块
+5. **禁止技术细节**：不要包含 SQL、代码、配置文件等技术实现内容
+6. **不编造**：待确认问题只能来自 BRD 原文或已确认的待确认点，上线计划只描述策略不编造日期
+7. **异常场景**：每个场景都必须覆盖异常/边界情况（取消、失败、部分成功等）
+8. **文档头尾**：包含文档信息表（作者、修改记录）和末尾分隔线
 </generation_instructions>`;
 }
